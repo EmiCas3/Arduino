@@ -1,0 +1,546 @@
+openapi: 3.0.3
+
+info:
+  title: SmartGreenAI - Radish Crop API
+  version: 1.0.0
+  description: |
+    Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
+    dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
+    MON-03 (cliente de transmision en la Pi) y MON-04 (ingesta y almacenamiento).
+
+    ## Convenciones que no se negocian
+
+    1. **`null` = sensor caido. `0` = lectura real.** Cualquier campo de medicion
+       puede venir en `null`. El backend NUNCA debe convertir `null` a 0 ni
+       descartar la lectura completa por eso: el resto de los sensores sigue
+       siendo valido.
+    2. **Se guardan `raw` y `pct` juntos.** El `raw` es la verdad del sensor y no
+       cambia; el `pct` depende de una calibracion que si va a cambiar. Guardando
+       los dos se puede recalcular el historico completo al recalibrar.
+    3. **El timestamp lo pone la Pi, no el Arduino.** El campo `ms` del Arduino es
+       milisegundos desde su boot y se reinicia en cada reset: sirve para detectar
+       reinicios, no para ordenar en el tiempo.
+    4. **La ingesta recibe lotes.** La Pi solo tiene internet cuando la laptop esta
+       encendida, asi que acumula en SQLite y sincroniza despues. Mandar de una en
+       una rompe ese diseño.
+
+  contact:
+    name: RadishSoftware - UPAEP, Agile Project Management
+  license:
+    name: Uso academico
+
+servers:
+  - url: https://api.smartgreenai.example/api/v1
+    description: Produccion (pendiente de definir host real)
+  - url: http://localhost:8000/api/v1
+    description: Desarrollo local
+
+tags:
+  - name: devices
+    description: Registro y consulta de dispositivos IoT (CONF-04)
+  - name: ingest
+    description: Ingesta de mediciones desde el gateway (MON-03 / MON-04)
+  - name: readings
+    description: Consulta de mediciones para el dashboard
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+
+  /devices:
+    post:
+      tags: [devices]
+      summary: Registrar un dispositivo IoT
+      description: |
+        Da de alta un gateway (Raspberry Pi) o un sensor bajo un vivero.
+        Devuelve la API key que ese dispositivo usara para la ingesta.
+        La key se muestra UNA sola vez.
+      operationId: registerDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceCreate'
+      responses:
+        '201':
+          description: Dispositivo registrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceWithKey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Ya existe un dispositivo con ese `device_id`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags: [devices]
+      summary: Listar dispositivos
+      operationId: listDevices
+      parameters:
+        - name: greenhouse_id
+          in: query
+          description: Filtrar por vivero
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive]
+      responses:
+        '200':
+          description: Lista de dispositivos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /devices/{device_id}:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    get:
+      tags: [devices]
+      summary: Obtener un dispositivo
+      operationId: getDevice
+      responses:
+        '200':
+          description: Dispositivo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /devices/{device_id}/readings:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      tags: [ingest]
+      summary: Enviar un lote de mediciones
+      description: |
+        Endpoint que llama la Raspberry Pi. Acepta de 1 a 500 lecturas por
+        request. La API key del header debe pertenecer al `device_id` de la ruta.
+
+        Idempotencia: si llega una lectura con el mismo `device_id` + `ts` que
+        una ya almacenada, se ignora y se cuenta en `duplicates`. Esto permite
+        que la Pi reintente sin miedo a duplicar datos si el POST llego pero la
+        respuesta se perdio.
+
+        Validacion parcial: si algunas lecturas del lote son invalidas, las
+        validas SI se guardan y las rechazadas se listan en `rejected` con su
+        indice. Solo se devuelve 400 si el lote entero es ilegible.
+      operationId: ingestReadings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReadingBatch'
+      responses:
+        '202':
+          description: Lote aceptado para almacenamiento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: |
+            El `device_id` no esta registrado. La Pi debe darse de alta via
+            CONF-04 antes de poder enviar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Lote mayor a 500 lecturas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /greenhouses/{greenhouse_id}/readings:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [readings]
+      summary: Consultar mediciones de un vivero
+      description: Lo que consume el dashboard web para las graficas historicas.
+      operationId: listReadings
+      parameters:
+        - name: from
+          in: query
+          description: Inicio del rango, ISO 8601 UTC
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Fin del rango, ISO 8601 UTC
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        '200':
+          description: Mediciones ordenadas por `ts` descendente
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoredReading'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Key emitida al registrar el dispositivo. Para el prototipo es
+        suficiente; no es apto para produccion real.
+
+  parameters:
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      description: Identificador unico del dispositivo, ej. `pi-vivero-01`
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
+
+  schemas:
+
+    DeviceCreate:
+      type: object
+      required: [device_id, greenhouse_id, type]
+      properties:
+        device_id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
+          example: pi-vivero-01
+        greenhouse_id:
+          type: string
+          description: FK al vivero al que pertenece
+          example: vivero-rabano-01
+        type:
+          type: string
+          enum: [gateway, sensor, actuator]
+        model:
+          type: string
+          example: Raspberry Pi 1 Model B+ v1.2
+        location:
+          type: string
+          description: Descripcion libre de donde esta fisicamente
+          example: Mesa del laboratorio, junto al tanque
+
+    Device:
+      allOf:
+        - $ref: '#/components/schemas/DeviceCreate'
+        - type: object
+          properties:
+            status:
+              type: string
+              enum: [active, inactive]
+            registered_at:
+              type: string
+              format: date-time
+            last_seen_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: '`null` si nunca ha enviado una lectura'
+
+    DeviceWithKey:
+      allOf:
+        - $ref: '#/components/schemas/Device'
+        - type: object
+          properties:
+            api_key:
+              type: string
+              description: Se devuelve UNA sola vez, al registrar
+
+    ReadingBatch:
+      type: object
+      required: [readings]
+      properties:
+        readings:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/Reading'
+
+    Reading:
+      type: object
+      description: |
+        Una lectura del Arduino, enriquecida por la Pi con el timestamp.
+        Los nombres de campo son exactamente los que imprime el sketch
+        `vivero_sensores.ino` por Serial: la Pi no renombra nada, solo agrega
+        `ts` y reenvia.
+      required: [ts]
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: |
+            Momento de la lectura en ISO 8601 UTC. Lo asigna la Raspberry Pi
+            al recibir la linea por Serial, NO el Arduino.
+          example: '2026-09-13T21:04:22Z'
+        ms:
+          type: integer
+          format: int64
+          description: |
+            Milisegundos desde el boot del Arduino. Sirve para detectar
+            reinicios (si baja respecto a la lectura anterior, hubo reset).
+            No usar para ordenar en el tiempo.
+          example: 148022
+
+        temp_c:
+          type: number
+          format: float
+          nullable: true
+          description: Temperatura del aire en grados Celsius (DHT11)
+          example: 24.2
+        hum_aire_pct:
+          type: number
+          format: float
+          nullable: true
+          description: Humedad relativa del aire en % (DHT11)
+          example: 72.0
+
+        suelo_raw:
+          type: integer
+          minimum: 0
+          maximum: 1023
+          nullable: true
+          description: 'Lectura ADC cruda del sensor capacitivo. Mas seco = mas alto'
+          example: 380
+        suelo_pct:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: |
+            Humedad de tierra en %, derivada de `suelo_raw` con la calibracion
+            vigente. Es un valor relativo a esa calibracion, no humedad
+            volumetrica del suelo.
+          example: 62
+
+        nivel_raw:
+          type: integer
+          minimum: 0
+          maximum: 1023
+          nullable: true
+          example: 150
+        nivel_pct:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: |
+            Nivel del tanque en %. Mide solo el tramo que cubre el sensor, no
+            el volumen total del tanque. `0` es un tanque vacio real; sensor
+            desconectado llega como `null`.
+          example: 75
+
+        luz_raw:
+          type: integer
+          minimum: 0
+          maximum: 1023
+          nullable: true
+          description: Lectura cruda del sensor de luz, sin calibrar a lux
+          example: 306
+        luz_nivel:
+          type: integer
+          minimum: 0
+          maximum: 1023
+          nullable: true
+          description: |
+            La misma lectura normalizada a "mas alto = mas luz", para que el
+            backend no necesite saber la polaridad del sensor.
+          example: 717
+
+        es_dia:
+          type: boolean
+          description: |
+            Dia o noche deducido del propio sensor de luz (el Arduino no tiene
+            reloj). El dashboard no debe alertar por falta de sol cuando es
+            `false`.
+        sol_min_hoy:
+          type: integer
+          minimum: 0
+          description: Minutos de sol pleno acumulados en el dia en curso
+          example: 42
+        sol_min_prev:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: |
+            Minutos de sol del dia anterior ya cerrado. `null` mientras no se
+            haya completado un ciclo dia-noche desde el ultimo reinicio.
+          example: 410
+
+        riego_sugerido:
+          type: boolean
+          description: |
+            El Arduino sugiere regar. Es una recomendacion, no una orden:
+            el principio del proyecto es decision support, not autonomy.
+        bomba_habilitada:
+          type: boolean
+          description: |
+            `false` cuando el nivel esta en critico o el sensor de nivel fallo.
+            Bloqueo de seguridad: la bomba es sumergible y se quema en seco.
+        vent:
+          type: string
+          enum: [BASE, ALTA]
+          description: |
+            Ventilacion recomendada. `BASE` es la ventilacion constante que el
+            cultivo requiere siempre; `ALTA` por calor o exceso de humedad.
+
+        estado:
+          type: string
+          enum: [OK, AVISO, ALERTA]
+          description: |
+            Resumen de la lectura. `AVISO` = fuera del rango ideal del rabano;
+            `ALERTA` = fuera de limite o sensor caido.
+        alertas:
+          type: array
+          description: |
+            Codigos activos en esta lectura. Enum cerrado: si el firmware agrega
+            uno nuevo, se actualiza este spec primero.
+          items:
+            type: string
+            enum:
+              - TEMP_ALTA
+              - TEMP_BAJA
+              - TEMP_ALTA_LEVE
+              - TEMP_BAJA_LEVE
+              - HUM_AIRE_ALTA
+              - HUM_AIRE_BAJA
+              - HUM_AIRE_ALTA_LEVE
+              - HUM_AIRE_BAJA_LEVE
+              - SUELO_ENCHARCADO
+              - SUELO_SECO
+              - SUELO_HUMEDO_LEVE
+              - SUELO_SECO_LEVE
+              - TANQUE_MITAD
+              - TANQUE_UN_CUARTO
+              - SOMBRA_PROLONGADA
+              - SOL_INSUFICIENTE
+              - FALLA_DHT
+              - FALLA_SUELO
+              - FALLA_NIVEL
+          example: [SUELO_SECO, TANQUE_MITAD]
+
+    StoredReading:
+      allOf:
+        - type: object
+          properties:
+            id:
+              type: integer
+              format: int64
+            device_id:
+              type: string
+            greenhouse_id:
+              type: string
+            received_at:
+              type: string
+              format: date-time
+              description: |
+                Cuando el backend recibio la lectura. Distinto de `ts` cuando
+                la Pi estuvo sin internet y sincronizo despues.
+        - $ref: '#/components/schemas/Reading'
+
+    IngestResult:
+      type: object
+      properties:
+        accepted:
+          type: integer
+          description: Lecturas almacenadas
+          example: 118
+        duplicates:
+          type: integer
+          description: Ignoradas por `device_id` + `ts` repetido
+          example: 2
+        rejected:
+          type: array
+          description: Lecturas invalidas del lote, con su indice en el array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              reason:
+                type: string
+          example:
+            - index: 44
+              reason: 'ts ausente o mal formado'
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Codigo estable, legible por maquina
+          example: device_not_registered
+        message:
+          type: string
+          description: Explicacion para humanos
+          example: 'El dispositivo pi-vivero-01 no esta registrado'
+
+  responses:
+    BadRequest:
+      description: Payload invalido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: API key ausente, invalida o de otro dispositivo
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
