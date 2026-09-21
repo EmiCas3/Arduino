@@ -17,6 +17,12 @@
     Nivel de agua .... VCC=5V  GND=GND  AO =A1
     Sensor de luz .... VCC=5V  GND=GND  AO =A2
 
+  Actuadores (via puente H L298N):
+    Ventilador ....... D3 -> IN1  (IN2 a GND del Arduino)  OUT1/OUT2 al motor
+    Bomba de riego ... D5 -> IN3  (IN4 a GND del Arduino)  OUT3/OUT4 a la bomba
+    L298N alimentacion: +12V=Fuente externa, GND=comun con Arduino
+    Jumpers ENA y ENB: puestos (habilitan canales A y B)
+
   Libreria necesaria: "DHT sensor library" de Adafruit
   (+ su dependencia "Adafruit Unified Sensor")
 
@@ -45,6 +51,10 @@
 #define PIN_SUELO  A0
 #define PIN_NIVEL  A1
 #define PIN_LUZ    A2
+
+// Actuadores (via puente H L298N, logica Active HIGH)
+#define PIN_VENT   3    // Ventilador: IN1 del L298N (IN2 a GND)
+#define PIN_BOMBA  5    // Bomba de riego: IN3 del L298N (IN4 a GND)
 
 DHT dht(PIN_DHT, DHT11);
 
@@ -112,6 +122,13 @@ byte severidad = OK;
 bool primeraAlerta = true;
 
 void setup() {
+  // Iniciar actuadores apagados ANTES de declararlos como salida
+  // para evitar arranques involuntarios al encender el Arduino.
+  digitalWrite(PIN_VENT, LOW);
+  digitalWrite(PIN_BOMBA, LOW);
+  pinMode(PIN_VENT, OUTPUT);
+  pinMode(PIN_BOMBA, OUTPUT);
+
   Serial.begin(9600);
   dht.begin();
   delay(2000);  // el DHT11 tarda en estabilizarse al arrancar
@@ -261,6 +278,14 @@ void loop() {
   bool ventAlta = (!isnan(tempC)   && tempC   > TEMP_IDEAL_MAX) ||
                   (!isnan(humAire) && humAire > HUMA_IDEAL_MAX);
 
+  // ---- control fisico de actuadores (L298N, HIGH = encendido) ----
+  // Ventilador: se enciende cuando la temperatura o humedad superan el ideal.
+  digitalWrite(PIN_VENT, ventAlta ? HIGH : LOW);
+
+  // Bomba: solo riega si el suelo esta seco Y el tanque tiene agua suficiente.
+  bool bombaActiva = riegoSugerido && bombaHabilitada;
+  digitalWrite(PIN_BOMBA, bombaActiva ? HIGH : LOW);
+
   // ---- salida JSON ----
   Serial.print(F("{\"ms\":"));
   Serial.print(millis());
@@ -286,9 +311,11 @@ void loop() {
 
   campoBool(F("riego_sugerido"),   riegoSugerido);
   campoBool(F("bomba_habilitada"), bombaHabilitada);
+  campoBool(F("bomba_activa"),     bombaActiva);
   Serial.print(F(",\"vent\":\""));
   Serial.print(ventAlta ? F("ALTA") : F("BASE"));
   Serial.print('"');
+  campoBool(F("vent_activo"), ventAlta);
 
   Serial.print(F(",\"alertas\":["));
   severidad = OK;
