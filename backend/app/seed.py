@@ -4,6 +4,7 @@ Seed script: datos de prueba para desarrollo y para la demo.
 Crea, SOLO si no existen (se puede correr las veces que quieras):
   1. El gateway pi-vivero-01 y su API key (MON-04).
   2. Un usuario por rol: productor, admin y superadmin (AUTH-01 / AUTH-02).
+  3. Los actuadores reales del vivero: ventilador y bomba (CONF-05).
 
 Las API keys y contraseñas se generan al azar y se muestran UNA sola vez.
 Si prefieres una contraseña conocida para los usuarios de demo, define
@@ -56,6 +57,30 @@ SEED_USERS = [
         "full_name": "Super Administrador",
         "role": "super_admin",
         "greenhouse_id": None,
+    },
+]
+
+# Actuadores del firmware vivero_sensoresV2.ino (puente H L298N)
+SEED_ACTUATORS = [
+    {
+        "actuator_id": "vent-vivero-01",
+        "name": "Ventilador",
+        "type": "fan",
+        "greenhouse_id": "vivero-rabano-01",
+        "area": "general",
+        "control_channel": "L298N-A/D3",
+        "gateway_device_id": "pi-vivero-01",
+        "model": "Motor DC 12 V, canal A del L298N",
+    },
+    {
+        "actuator_id": "bomba-riego-01",
+        "name": "Bomba de riego",
+        "type": "pump",
+        "greenhouse_id": "vivero-rabano-01",
+        "area": "general",
+        "control_channel": "L298N-B/D5",
+        "gateway_device_id": "pi-vivero-01",
+        "model": "Bomba sumergible 12 V, canal B del L298N",
     },
 ]
 
@@ -128,11 +153,48 @@ async def seed_users(db: aiosqlite.Connection) -> List[Tuple[str, str, str]]:
     return created
 
 
+async def seed_actuators(db: aiosqlite.Connection) -> List[str]:
+    """Registra los actuadores de demo que falten. Devuelve los ids creados."""
+    cursor = await db.execute("SELECT id FROM users WHERE username = 'admin'")
+    admin = await cursor.fetchone()
+    created = []
+    for actuator in SEED_ACTUATORS:
+        cursor = await db.execute(
+            "SELECT 1 FROM actuators WHERE actuator_id = ?", (actuator["actuator_id"],)
+        )
+        if await cursor.fetchone():
+            continue
+        await db.execute(
+            """
+            INSERT INTO actuators (actuator_id, name, type, greenhouse_id, area,
+                                   control_channel, gateway_device_id, model,
+                                   status, registered_at, registered_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            """,
+            (
+                actuator["actuator_id"],
+                actuator["name"],
+                actuator["type"],
+                actuator["greenhouse_id"],
+                actuator["area"],
+                actuator["control_channel"],
+                actuator["gateway_device_id"],
+                actuator["model"],
+                _now(),
+                admin["id"] if admin else None,
+            ),
+        )
+        created.append(actuator["actuator_id"])
+    await db.commit()
+    return created
+
+
 async def seed() -> None:
     db = await init_db()
     try:
         api_key = await seed_device(db)
         users = await seed_users(db)
+        actuators = await seed_actuators(db)
     finally:
         await close_db()
 
@@ -152,6 +214,11 @@ async def seed() -> None:
             print(f"  {username:<12} rol={role:<12} contraseña={password}")
     else:
         print("Los usuarios de demo ya existían. No se modificaron.")
+    print("-" * 64)
+    if actuators:
+        print("Actuadores registrados: " + ", ".join(actuators))
+    else:
+        print("Los actuadores de demo ya existían. No se modificaron.")
     print("=" * 64)
 
 

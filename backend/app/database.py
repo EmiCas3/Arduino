@@ -106,6 +106,33 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
             revoked_at   TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
+
+        -- Actuadores registrados por un Administrador (CONF-05).
+        -- Tabla propia: los actuadores no se autentican (los maneja el Arduino
+        -- via L298N) y devices.api_key_hash es NOT NULL.
+        -- Desactivar = status 'inactive'. No hay DELETE ni ON DELETE CASCADE
+        -- para conservar el historial de eventos (ACT-02 / ACT-04 / ACT-06).
+        CREATE TABLE IF NOT EXISTS actuators (
+            actuator_id       TEXT PRIMARY KEY,
+            name              TEXT NOT NULL,
+            type              TEXT NOT NULL
+                              CHECK(type IN ('pump','fan','shade','light')),
+            greenhouse_id     TEXT NOT NULL,
+            area              TEXT NOT NULL,
+            control_channel   TEXT NOT NULL,
+            gateway_device_id TEXT REFERENCES devices(device_id),
+            model             TEXT,
+            status            TEXT NOT NULL DEFAULT 'active'
+                              CHECK(status IN ('active','inactive')),
+            registered_at     TEXT NOT NULL,
+            registered_by     INTEGER REFERENCES users(id),
+            updated_at        TEXT,
+            deactivated_at    TEXT
+        );
+        -- Un canal fisico no puede estar ocupado por dos actuadores ACTIVOS
+        -- del mismo vivero.
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_actuators_active_channel
+            ON actuators(greenhouse_id, control_channel) WHERE status = 'active';
     """)
     await _db.commit()
     return _db

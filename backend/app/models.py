@@ -180,3 +180,99 @@ class LoginResponse(BaseModel):
         ..., description="La sesión se cierra tras estos minutos sin actividad"
     )
     user: UserPublic
+
+
+# ── Actuadores (CONF-05) ───────────────────────────────────────────────
+
+SLUG_REGEX = r"^[a-z0-9][a-z0-9-]{2,49}$"      # mismo patrón que DeviceId
+AREA_REGEX = r"^[a-z0-9][a-z0-9-]{0,49}$"
+CHANNEL_REGEX = r"^[A-Za-z0-9][A-Za-z0-9/_.:-]{0,49}$"
+
+
+class ActuatorType(str, Enum):
+    """Equipos controlables de un vivero."""
+
+    pump = "pump"      # bomba de riego
+    fan = "fan"        # ventilador
+    shade = "shade"    # malla sombra
+    light = "light"    # iluminación
+
+
+class ActuatorStatus(str, Enum):
+    active = "active"
+    inactive = "inactive"
+
+
+def _texto_no_vacio(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    value = value.strip()
+    if not value:
+        raise ValueError("No puede estar vacío")
+    return value
+
+
+def _texto_opcional(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    value = value.strip()
+    return value or None
+
+
+class ActuatorCreate(BaseModel):
+    """Alta de un actuador que existe físicamente en el vivero."""
+
+    actuator_id: str = Field(..., regex=SLUG_REGEX, example="bomba-riego-01")
+    name: str = Field(..., min_length=1, max_length=80, example="Bomba de riego")
+    type: ActuatorType
+    greenhouse_id: str = Field(..., regex=SLUG_REGEX, example="vivero-rabano-01")
+    area: str = Field(..., regex=AREA_REGEX, example="general")
+    control_channel: str = Field(
+        ...,
+        regex=CHANNEL_REGEX,
+        example="L298N-B/D5",
+        description="Canal físico que lo controla (driver/pin)",
+    )
+    gateway_device_id: Optional[str] = Field(
+        None,
+        regex=SLUG_REGEX,
+        example="pi-vivero-01",
+        description="Gateway que le enviará los comandos (opcional)",
+    )
+    model: Optional[str] = Field(None, max_length=120, example="Bomba sumergible 12 V")
+
+    _name = validator("name", allow_reuse=True)(_texto_no_vacio)
+    _model = validator("model", allow_reuse=True)(_texto_opcional)
+
+
+class ActuatorUpdate(BaseModel):
+    """Cambios permitidos. `type` y `greenhouse_id` NO se editan: cambiarlos
+    corrompería el historial; lo correcto es desactivar y registrar uno nuevo."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=80)
+    area: Optional[str] = Field(None, regex=AREA_REGEX)
+    control_channel: Optional[str] = Field(None, regex=CHANNEL_REGEX)
+    model: Optional[str] = Field(None, max_length=120)
+    status: Optional[ActuatorStatus] = None
+
+    class Config:
+        extra = "forbid"
+
+    _name = validator("name", allow_reuse=True)(_texto_no_vacio)
+    _model = validator("model", allow_reuse=True)(_texto_opcional)
+
+
+class Actuator(BaseModel):
+    actuator_id: str
+    name: str
+    type: ActuatorType
+    greenhouse_id: str
+    area: str
+    control_channel: str
+    gateway_device_id: Optional[str] = None
+    model: Optional[str] = None
+    status: ActuatorStatus
+    registered_at: datetime
+    registered_by: Optional[int] = None
+    updated_at: Optional[datetime] = None
+    deactivated_at: Optional[datetime] = None
