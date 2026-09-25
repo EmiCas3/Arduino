@@ -31,3 +31,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 PLAN_Sprint2_Parte1.md
+
+# Capturas y archivos que guarda la app de Claude (no son parte del proyecto)
+Claude outputs/
