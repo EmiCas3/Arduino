@@ -2,11 +2,15 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
     MON-03 (cliente de transmision en la Pi) y MON-04 (ingesta y almacenamiento).
+
+    **v1.1.0 (Sprint 2):** agrega sesiones de usuario (AUTH-01), control de
+    acceso por rol (AUTH-02), registro de actuadores (CONF-05) y ultimas
+    lecturas (DASH-01).
 
     ## Convenciones que no se negocian
 
@@ -23,6 +27,31 @@ info:
     4. **La ingesta recibe lotes.** La Pi solo tiene internet cuando la laptop esta
        encendida, asi que acumula en SQLite y sincroniza despues. Mandar de una en
        una rompe ese diseño.
+
+    ## Dos formas de autenticarse
+
+    - **Dispositivos** (la Pi): header `X-API-Key`. Solo para la ingesta.
+    - **Usuarios** (dashboard): `Authorization: Bearer <jwt>` obtenido en
+      `POST /auth/login`. La sesion se cierra tras 30 min sin actividad
+      (configurable) y dura como maximo 8 h.
+
+    ## Roles
+
+    | Rol | Puede |
+    |---|---|
+    | `producer` | Ver su vivero asignado y sus actuadores activos |
+    | `admin` | Todo lo anterior en cualquier vivero + registrar y editar actuadores |
+    | `super_admin` | Todo lo de `admin` (+ roles y bitacora en sprints futuros) |
+
+    Rol insuficiente → **403** y la accion no se ejecuta. Sin token o con token
+    vencido → **401**. El rol se lee de la BD en cada request.
+
+    ## Nota sobre el formato de error
+
+    El backend responde los errores como `{"detail": {"error", "message"}}`
+    (schema `ErrorDetail`). Los endpoints de v1.0.0 documentan `Error` sin el
+    envoltorio `detail`; se deja asi para no romper al cliente de la Pi hasta
+    que el equipo decida unificarlo.
 
   contact:
     name: RadishSoftware - UPAEP, Agile Project Management
@@ -42,6 +71,10 @@ tags:
     description: Ingesta de mediciones desde el gateway (MON-03 / MON-04)
   - name: readings
     description: Consulta de mediciones para el dashboard
+  - name: auth
+    description: Sesiones de usuario (AUTH-01)
+  - name: actuators
+    description: Registro de actuadores (CONF-05)
 
 security:
   - ApiKeyAuth: []
@@ -223,6 +256,262 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # ── Sprint 2: sesiones de usuario (AUTH-01 / AUTH-02) ─────────────────
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Iniciar sesion
+      description: |
+        Recibe usuario O email y contrasena. Si son validos crea una sesion y
+        devuelve un JWT para el header `Authorization: Bearer <token>`.
+
+        Cualquier credencial invalida (usuario inexistente, contrasena
+        incorrecta o usuario inactivo) responde el MISMO 401 generico, sin
+        decir que campo fallo, y NO crea sesion.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Sesion creada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Credenciales invalidas (`invalid_credentials`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Cerrar sesion
+      description: Revoca la sesion actual. El token deja de servir de inmediato.
+      operationId: logout
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Sesion cerrada
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Usuario de la sesion actual
+      description: El frontend lo usa para conocer el rol y armar el menu.
+      operationId: getCurrentUser
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Usuario autenticado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPublic'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+
+  # ── Sprint 2: actuadores (CONF-05) ────────────────────────────────────
+
+  /actuators:
+    post:
+      tags: [actuators]
+      summary: Registrar un actuador
+      description: |
+        Solo `admin` y `super_admin`. Registra un equipo instalado en un vivero
+        con su area y su canal de control. Un canal no puede estar ocupado por
+        dos actuadores ACTIVOS del mismo vivero.
+      operationId: registerActuator
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActuatorCreate'
+      responses:
+        '201':
+          description: Actuador registrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Actuator'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: El gateway indicado no esta registrado (`gateway_not_registered`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '409':
+          description: |
+            Id repetido (`actuator_already_exists`) o canal ocupado por otro
+            actuador activo del vivero (`control_channel_in_use`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [actuators]
+      summary: Listar actuadores
+      description: |
+        Lo que consumen las pantallas de control. Por defecto solo los activos.
+        Un `producer` solo ve los de su vivero asignado y no puede pedir
+        `status=inactive` (403).
+      operationId: listActuators
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: greenhouse_id
+          in: query
+          schema:
+            type: string
+        - name: area
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/ActuatorType'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ActuatorStatus'
+      responses:
+        '200':
+          description: Actuadores, ordenados por vivero, area y nombre
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Actuator'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /actuators/{actuator_id}:
+    parameters:
+      - $ref: '#/components/parameters/ActuatorId'
+    get:
+      tags: [actuators]
+      summary: Obtener un actuador
+      description: Para un `producer`, un actuador inactivo o de otro vivero responde 404.
+      operationId: getActuator
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Actuador
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Actuator'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '404':
+          description: No existe o no es visible para el usuario (`actuator_not_found`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+    patch:
+      tags: [actuators]
+      summary: Editar, desactivar o reactivar un actuador
+      description: |
+        Solo `admin` y `super_admin`. `status: inactive` lo quita de las
+        pantallas de control SIN borrar su historial (no existe DELETE).
+        `type` y `greenhouse_id` no se pueden editar.
+      operationId: updateActuator
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActuatorUpdate'
+      responses:
+        '200':
+          description: Actuador actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Actuator'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: El actuador no existe (`actuator_not_found`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '409':
+          description: Al reactivar o cambiar de canal, el canal ya esta ocupado (`control_channel_in_use`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ── Sprint 2: ultimas lecturas (DASH-01) ──────────────────────────────
+
+  /greenhouses/{greenhouse_id}/readings/latest:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [readings]
+      summary: Ultimas lecturas de un vivero
+      description: |
+        Ultimo valor NO nulo de cada medicion con unidad, antiguedad y bandera
+        `stale` (mas vieja que `SMARTGREENAI_READING_STALE_MINUTES`, 15 por
+        defecto). `sensor_down` indica que la lectura mas reciente del vivero
+        llego con ese sensor en `null`. Un `producer` solo consulta su vivero
+        asignado. Si el vivero no tiene lecturas responde `has_data: false`.
+      operationId: getLatestReadings
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Estado actual del vivero
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatestReadings'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
 components:
 
   securitySchemes:
@@ -233,6 +522,13 @@ components:
       description: |
         Key emitida al registrar el dispositivo. Para el prototipo es
         suficiente; no es apto para produccion real.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token obtenido en `POST /auth/login`. Solo identifica la sesion; el
+        rol se valida contra la BD en cada request.
 
   parameters:
     DeviceId:
@@ -240,6 +536,14 @@ components:
       in: path
       required: true
       description: Identificador unico del dispositivo, ej. `pi-vivero-01`
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
+    ActuatorId:
+      name: actuator_id
+      in: path
+      required: true
+      description: Identificador unico del actuador, ej. `bomba-riego-01`
       schema:
         type: string
         pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
@@ -525,6 +829,283 @@ components:
           description: Explicacion para humanos
           example: 'El dispositivo pi-vivero-01 no esta registrado'
 
+    # ── Sprint 2: usuarios ────────────────────────────────────────────
+
+    Role:
+      type: string
+      enum: [producer, admin, super_admin]
+      description: |
+        `producer` = Radish Producer, `admin` = Administrator,
+        `super_admin` = Super Administrator.
+
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+          minLength: 1
+          maxLength: 254
+          description: Usuario o email (no distingue mayusculas)
+          example: productor
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+
+    UserPublic:
+      type: object
+      required: [id, username, email, role]
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+          example: productor
+        email:
+          type: string
+          example: productor@smartgreen.local
+        full_name:
+          type: string
+          nullable: true
+        role:
+          $ref: '#/components/schemas/Role'
+        greenhouse_id:
+          type: string
+          nullable: true
+          description: Vivero asignado a un productor. `null` para administradores.
+          example: vivero-rabano-01
+
+    LoginResponse:
+      type: object
+      required: [access_token, token_type, expires_at, idle_timeout_minutes, user]
+      properties:
+        access_token:
+          type: string
+          description: 'JWT HS256 para el header `Authorization: Bearer <token>`'
+        token_type:
+          type: string
+          example: bearer
+        expires_at:
+          type: string
+          format: date-time
+          description: Vencimiento absoluto de la sesion (8 h por defecto)
+        idle_timeout_minutes:
+          type: integer
+          description: La sesion se cierra tras estos minutos sin actividad
+          example: 30
+        user:
+          $ref: '#/components/schemas/UserPublic'
+
+    # ── Sprint 2: actuadores ──────────────────────────────────────────
+
+    ActuatorType:
+      type: string
+      enum: [pump, fan, shade, light]
+      description: bomba de riego, ventilador, malla sombra, iluminacion
+
+    ActuatorStatus:
+      type: string
+      enum: [active, inactive]
+
+    ActuatorCreate:
+      type: object
+      required: [actuator_id, name, type, greenhouse_id, area, control_channel]
+      properties:
+        actuator_id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
+          example: bomba-riego-01
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          example: Bomba de riego
+        type:
+          $ref: '#/components/schemas/ActuatorType'
+        greenhouse_id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
+          example: vivero-rabano-01
+        area:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
+          example: general
+        control_channel:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9/_.:-]{0,49}$'
+          description: Canal fisico que lo controla (driver/pin)
+          example: L298N-B/D5
+        gateway_device_id:
+          type: string
+          nullable: true
+          pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
+          description: Gateway registrado del mismo vivero que le enviara comandos
+          example: pi-vivero-01
+        model:
+          type: string
+          nullable: true
+          maxLength: 120
+          example: Bomba sumergible 12 V, canal B del L298N
+
+    ActuatorUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Solo estos campos son editables. `type` y `greenhouse_id` no.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        area:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
+        control_channel:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9/_.:-]{0,49}$'
+        model:
+          type: string
+          nullable: true
+          maxLength: 120
+        status:
+          $ref: '#/components/schemas/ActuatorStatus'
+
+    Actuator:
+      allOf:
+        - $ref: '#/components/schemas/ActuatorCreate'
+        - type: object
+          properties:
+            status:
+              $ref: '#/components/schemas/ActuatorStatus'
+            registered_at:
+              type: string
+              format: date-time
+            registered_by:
+              type: integer
+              nullable: true
+              description: Id del usuario que lo registro
+            updated_at:
+              type: string
+              format: date-time
+              nullable: true
+            deactivated_at:
+              type: string
+              format: date-time
+              nullable: true
+
+    # ── Sprint 2: ultimas lecturas ────────────────────────────────────
+
+    LatestMetric:
+      type: object
+      required: [key, label, unit, stale, sensor_down]
+      properties:
+        key:
+          type: string
+          enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct, luz_nivel]
+        label:
+          type: string
+          example: Temperatura del aire
+        unit:
+          type: string
+          example: °C
+        value:
+          type: number
+          nullable: true
+          description: Ultimo valor NO nulo. `null` si nunca ha llegado uno.
+          example: 24.2
+        raw:
+          type: integer
+          nullable: true
+          description: Lectura ADC cruda del mismo momento (suelo, nivel y luz)
+        ts:
+          type: string
+          format: date-time
+          nullable: true
+        age_seconds:
+          type: integer
+          nullable: true
+        stale:
+          type: boolean
+        sensor_down:
+          type: boolean
+        device_id:
+          type: string
+          nullable: true
+        device_location:
+          type: string
+          nullable: true
+
+    LatestReadingSummary:
+      type: object
+      properties:
+        ts:
+          type: string
+          format: date-time
+        received_at:
+          type: string
+          format: date-time
+        age_seconds:
+          type: integer
+        stale:
+          type: boolean
+        device_id:
+          type: string
+        estado:
+          type: string
+          enum: [OK, AVISO, ALERTA]
+          nullable: true
+        alertas:
+          type: array
+          items:
+            type: string
+        riego_sugerido:
+          type: boolean
+          nullable: true
+        bomba_habilitada:
+          type: boolean
+          nullable: true
+        vent:
+          type: string
+          enum: [BASE, ALTA]
+          nullable: true
+        es_dia:
+          type: boolean
+          nullable: true
+
+    LatestReadings:
+      type: object
+      required: [greenhouse_id, generated_at, stale_after_minutes, has_data, metrics]
+      properties:
+        greenhouse_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        stale_after_minutes:
+          type: integer
+          example: 15
+        has_data:
+          type: boolean
+        last_reading:
+          allOf:
+            - $ref: '#/components/schemas/LatestReadingSummary'
+          nullable: true
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/LatestMetric'
+
+    ErrorDetail:
+      type: object
+      description: |
+        Formato real de los errores que lanza el backend (FastAPI envuelve el
+        error en `detail`). Ver la nota en la descripcion del API.
+      properties:
+        detail:
+          $ref: '#/components/schemas/Error'
+
   responses:
     BadRequest:
       description: Payload invalido
@@ -544,3 +1125,20 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    SessionRequired:
+      description: |
+        Sin token (`missing_token`), token invalido o vencido (`invalid_token`)
+        o sesion terminada / inactiva mas de 30 min (`session_expired`).
+        Incluye el header `WWW-Authenticate: Bearer`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+    Forbidden:
+      description: El rol del usuario no tiene permiso (`forbidden`). La accion no se ejecuta.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+    ValidationError:
+      description: Cuerpo o parametros invalidos (validacion de FastAPI)
