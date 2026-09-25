@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import close_db, init_db
+from app.routers import auth as auth_routes
 from app.routers import ingest
 
 
@@ -40,6 +41,7 @@ app.add_middleware(
 
 # Registrar routers bajo /api/v1
 app.include_router(ingest.router, prefix="/api/v1")
+app.include_router(auth_routes.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

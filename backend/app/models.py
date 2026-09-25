@@ -133,3 +133,50 @@ class StoredReading(Reading):
 class ErrorResponse(BaseModel):
     error: str
     message: str
+
+
+# ── Auth (AUTH-01 / AUTH-02) ───────────────────────────────────────────
+
+class Role(str, Enum):
+    """Roles de la plataforma. Los textos en español viven en el frontend."""
+
+    producer = "producer"          # Radish Producer
+    admin = "admin"                # Administrator
+    super_admin = "super_admin"    # Super Administrator
+
+
+class LoginRequest(BaseModel):
+    """Credenciales del formulario. `login` acepta usuario O email."""
+
+    login: str = Field(..., min_length=1, max_length=254, example="productor")
+    password: str = Field(..., min_length=1, max_length=128)
+
+    @validator("login")
+    def _login_sin_espacios(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("El usuario o email no puede estar vacío")
+        return value
+
+
+class UserPublic(BaseModel):
+    """Datos del usuario que se pueden mostrar. Nunca incluye el hash."""
+
+    id: int
+    username: str
+    email: str
+    full_name: Optional[str] = None
+    role: Role
+    greenhouse_id: Optional[str] = None
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: datetime = Field(
+        ..., description="Vencimiento absoluto de la sesión (UTC)"
+    )
+    idle_timeout_minutes: int = Field(
+        ..., description="La sesión se cierra tras estos minutos sin actividad"
+    )
+    user: UserPublic

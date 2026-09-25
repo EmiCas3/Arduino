@@ -3,6 +3,10 @@ Conexión a SQLite y creación de tablas.
 
 Usa aiosqlite para operaciones async compatibles con FastAPI.
 La BD se crea en backend/smartgreenai.db por defecto.
+
+No hay herramienta de migraciones: las tablas se crean con
+CREATE TABLE IF NOT EXISTS, que NO altera tablas que ya existen. Por eso los
+items nuevos solo AGREGAN tablas e índices; devices y readings no se tocan.
 """
 
 from typing import Optional
@@ -73,6 +77,35 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
             alertas          TEXT,
             UNIQUE(device_id, ts)
         );
+
+        -- Usuarios de la plataforma (AUTH-01 / AUTH-02).
+        -- greenhouse_id: vivero asignado a un productor (NULL = todos, para admins).
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            full_name     TEXT,
+            password_hash TEXT NOT NULL,
+            role          TEXT NOT NULL
+                          CHECK(role IN ('producer','admin','super_admin')),
+            greenhouse_id TEXT,
+            status        TEXT NOT NULL DEFAULT 'active'
+                          CHECK(status IN ('active','inactive')),
+            created_at    TEXT NOT NULL,
+            last_login_at TEXT
+        );
+
+        -- Sesiones: permiten el timeout por inactividad, el logout real y,
+        -- mas adelante, revocar sesiones al desactivar usuarios (AUTH-03).
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id   TEXT PRIMARY KEY,
+            user_id      INTEGER NOT NULL REFERENCES users(id),
+            created_at   TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            expires_at   TEXT NOT NULL,
+            revoked_at   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
     """)
     await _db.commit()
     return _db
