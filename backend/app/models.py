@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, StrictFloat, StrictInt, validator
 
 
 # ── Enums ──────────────────────────────────────────────────────────────
@@ -276,3 +276,51 @@ class Actuator(BaseModel):
     registered_by: Optional[int] = None
     updated_at: Optional[datetime] = None
     deactivated_at: Optional[datetime] = None
+
+
+# ── Últimas lecturas (DASH-01) ─────────────────────────────────────────
+
+class LatestMetric(BaseModel):
+    """Último valor conocido de una medición del vivero."""
+
+    key: str = Field(..., example="temp_c")
+    label: str = Field(..., example="Temperatura del aire")
+    unit: str = Field(..., example="°C")
+    # Strict: los enteros siguen siendo enteros y los decimales no se truncan
+    value: Optional[Union[StrictInt, StrictFloat]] = Field(
+        None, description="Último valor NO nulo; null si nunca ha llegado uno"
+    )
+    raw: Optional[int] = Field(None, description="Lectura ADC cruda del mismo momento")
+    ts: Optional[datetime] = None
+    age_seconds: Optional[int] = Field(None, description="Segundos desde la lectura")
+    stale: bool = Field(..., description="Más vieja que el intervalo configurado")
+    sensor_down: bool = Field(
+        ..., description="La lectura más reciente del vivero trae este campo en null"
+    )
+    device_id: Optional[str] = None
+    device_location: Optional[str] = None
+
+
+class LatestReadingSummary(BaseModel):
+    """Resumen de la lectura más reciente del vivero."""
+
+    ts: datetime
+    received_at: datetime
+    age_seconds: int
+    stale: bool
+    device_id: str
+    estado: Optional[EstadoEnum] = None
+    alertas: List[AlertaEnum] = Field(default_factory=list)
+    riego_sugerido: Optional[bool] = None
+    bomba_habilitada: Optional[bool] = None
+    vent: Optional[VentEnum] = None
+    es_dia: Optional[bool] = None
+
+
+class LatestReadings(BaseModel):
+    greenhouse_id: str
+    generated_at: datetime
+    stale_after_minutes: int
+    has_data: bool
+    last_reading: Optional[LatestReadingSummary] = None
+    metrics: List[LatestMetric]

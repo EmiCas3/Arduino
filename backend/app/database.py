@@ -133,6 +133,11 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
         -- del mismo vivero.
         CREATE UNIQUE INDEX IF NOT EXISTS ux_actuators_active_channel
             ON actuators(greenhouse_id, control_channel) WHERE status = 'active';
+
+        -- Acelera "ultima lectura por vivero" (DASH-01). Crear un indice no
+        -- altera las columnas de readings y es idempotente.
+        CREATE INDEX IF NOT EXISTS ix_readings_greenhouse_ts
+            ON readings(greenhouse_id, ts);
     """)
     await _db.commit()
     return _db
