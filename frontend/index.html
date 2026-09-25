@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>SmartGreenAI</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <script>
+    // Punto de entrada: con sesión guardada va al panel (que valida el token
+    // con el servidor); sin sesión, al login.
+    var destino = "login.html";
+    try {
+      if (sessionStorage.getItem("sg.session")) destino = "panel.html";
+    } catch (e) { /* almacenamiento bloqueado: ir al login */ }
+    location.replace(destino);
+  </script>
+</head>
+<body>
+  <noscript>SmartGreenAI necesita JavaScript. <a href="login.html">Ir al inicio de sesión</a></noscript>
+</body>
+</html>

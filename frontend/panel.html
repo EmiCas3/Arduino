@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Panel · SmartGreenAI</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+  <script>
+    try { var t = localStorage.getItem("sg.theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <script type="module" src="js/panel.js"></script>
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar" aria-label="Navegación">
+      <a class="brand-mark" href="#/" aria-label="SmartGreenAI, ir a mi inicio">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="9" fill="#1D7A4C"/>
+          <path d="M16 13.2c-1.1-3.5-3.5-5.6-7.2-5.9.2 3.7 2.7 5.9 7.2 5.9z" fill="#C4F2D4"/>
+          <path d="M16 13.2c1.1-3.5 3.5-5.6 7.2-5.9-.2 3.7-2.7 5.9-7.2 5.9z" fill="#8FE0AE"/>
+          <path d="M16 12.6c-3.7 0-5.8 2.5-5.3 5.6.4 3 2.7 5.5 5.3 8.8 2.6-3.3 4.9-5.8 5.3-8.8.5-3.1-1.6-5.6-5.3-5.6z" fill="#F0588C"/>
+        </svg>
+        <span>
+          <span class="brand-name">SmartGreenAI</span>
+          <span class="brand-sub">Radish Crop</span>
+        </span>
+      </a>
+
+      <!-- El menú se arma según el rol (roles.js). El servidor valida cada acción. -->
+      <nav class="nav" id="nav" aria-label="Menú principal"></nav>
+
+      <div class="sidebar-foot">
+        <div class="user-chip">
+          <div class="avatar" id="user-avatar" aria-hidden="true">·</div>
+          <div>
+            <div class="user-name" id="user-name">Cargando…</div>
+            <div class="user-role" id="user-role"></div>
+          </div>
+        </div>
+        <button class="btn btn-night btn-block" id="logout-btn" type="button">
+          <span class="btn-label">Cerrar sesión</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="menu-btn" type="button"
+                aria-label="Abrir menú" aria-controls="sidebar" aria-expanded="false"></button>
+        <div class="crumb" id="crumb" aria-live="polite"></div>
+        <div class="topbar-actions">
+          <span class="session-hint" id="session-hint"></span>
+          <button class="icon-btn" id="theme-toggle" type="button" aria-label="Cambiar a tema oscuro"></button>
+        </div>
+      </header>
+
+      <main class="view" id="view" tabindex="-1">
+        <div class="page-head">
+          <div class="skeleton-line" style="width: 120px"></div>
+          <div class="skeleton-line" style="width: 280px; height: 28px"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="backdrop" id="backdrop" hidden></div>
+</body>
+</html>

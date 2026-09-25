@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Iniciar sesión · SmartGreenAI</title>
+  <meta name="description" content="Acceso a SmartGreenAI: monitoreo del vivero de rábano.">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+  <script>
+    try { var t = localStorage.getItem("sg.theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <script type="module" src="js/login.js"></script>
+</head>
+<body>
+  <main class="login">
+    <div class="theme-slot">
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="Cambiar a tema oscuro"></button>
+    </div>
+
+    <section class="login-brand" aria-labelledby="brand-title">
+      <a class="brand-mark" href="login.html" aria-label="SmartGreenAI, Radish Crop">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="9" fill="#1D7A4C"/>
+          <path d="M16 13.2c-1.1-3.5-3.5-5.6-7.2-5.9.2 3.7 2.7 5.9 7.2 5.9z" fill="#C4F2D4"/>
+          <path d="M16 13.2c1.1-3.5 3.5-5.6 7.2-5.9-.2 3.7-2.7 5.9-7.2 5.9z" fill="#8FE0AE"/>
+          <path d="M16 12.6c-3.7 0-5.8 2.5-5.3 5.6.4 3 2.7 5.5 5.3 8.8 2.6-3.3 4.9-5.8 5.3-8.8.5-3.1-1.6-5.6-5.3-5.6z" fill="#F0588C"/>
+        </svg>
+        <span>
+          <span class="brand-name">SmartGreenAI</span>
+          <span class="brand-sub">Radish Crop</span>
+        </span>
+      </a>
+
+      <div class="brand-hero">
+        <h1 class="brand-title" id="brand-title">Tu cultivo de rábano, <em>medido cada 2&nbsp;segundos.</em></h1>
+        <p class="brand-lede">Temperatura, humedad del aire y de la tierra, nivel del tanque y luz del vivero, en un solo lugar.</p>
+      </div>
+
+      <div class="brand-stage">
+        <figure class="brand-art" aria-hidden="true">
+          <svg viewBox="0 0 320 300" role="presentation">
+            <defs>
+              <linearGradient id="g-bulb" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#FF86B0"/>
+                <stop offset="0.55" stop-color="#D93A70"/>
+                <stop offset="1" stop-color="#9B1B4A"/>
+              </linearGradient>
+              <linearGradient id="g-leaf-a" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#A8EEC0"/>
+                <stop offset="1" stop-color="#3A9C63"/>
+              </linearGradient>
+              <linearGradient id="g-leaf-b" x1="1" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#8BE2AB"/>
+                <stop offset="1" stop-color="#2B8453"/>
+              </linearGradient>
+            </defs>
+
+            <!-- Arco y paneles del invernadero -->
+            <path d="M30 262V150Q160 22 290 150V262" fill="rgb(143 224 174 / 0.035)" stroke="rgb(214 240 224 / 0.24)" stroke-width="2"/>
+            <path d="M95 262V103M160 262V86M225 262V103M30 196H290" stroke="rgb(214 240 224 / 0.1)" stroke-width="1.5"/>
+
+            <!-- Hojas (se mecen) -->
+            <g class="leaf-sway">
+              <path d="M158 204C128 186 104 162 110 124c30 8 50 36 48 80z" fill="url(#g-leaf-a)"/>
+              <path d="M162 204c32-20 56-44 50-84-30 10-50 38-50 84z" fill="url(#g-leaf-b)"/>
+              <path d="M160 206c-8-32-8-60 0-98 8 38 8 66 0 98z" fill="#7FD9A1"/>
+              <path d="M157 198c-14-22-28-42-40-64M163 198c14-22 28-42 41-68" stroke="rgb(14 36 25 / 0.35)" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+            </g>
+
+            <!-- Rábano -->
+            <path d="M160 196c-26 0-38 20-32 40 5 18 22 28 32 48 10-20 27-30 32-48 6-20-6-40-32-40z" fill="url(#g-bulb)"/>
+            <path d="M142 214c-6 8-6 20-1 30" stroke="rgb(255 255 255 / 0.4)" stroke-width="3" fill="none" stroke-linecap="round"/>
+            <path d="M160 284v14" stroke="#E79AB5" stroke-width="2" stroke-linecap="round"/>
+
+            <!-- Tierra (deja ver la raíz) -->
+            <path d="M20 236q70-10 140-6t140 4v66H20z" fill="rgb(38 26 18 / 0.6)"/>
+            <path d="M20 236q70-10 140-6t140 4" stroke="rgb(214 240 224 / 0.3)" stroke-width="2" fill="none"/>
+            <g fill="rgb(214 240 224 / 0.16)">
+              <circle cx="58" cy="252" r="2"/><circle cx="92" cy="266" r="1.6"/><circle cx="120" cy="248" r="1.4"/>
+              <circle cx="208" cy="258" r="1.8"/><circle cx="262" cy="248" r="1.5"/><circle cx="280" cy="270" r="2"/>
+            </g>
+
+            <!-- Sensor de humedad clavado en la tierra -->
+            <rect x="232" y="176" width="8" height="86" rx="3" fill="#D9E7DE" opacity="0.85"/>
+            <rect x="226" y="164" width="20" height="16" rx="4" fill="#EAF4EE"/>
+            <circle cx="236" cy="172" r="2.6" fill="#4CC38A"/>
+            <g fill="none" stroke="#8FE0AE" stroke-width="2" stroke-linecap="round">
+              <path class="signal-arc" d="M254 160a16 16 0 0 1 0 24"/>
+              <path class="signal-arc" d="M262 152a26 26 0 0 1 0 40"/>
+              <path class="signal-arc" d="M270 144a36 36 0 0 1 0 56"/>
+            </g>
+          </svg>
+        </figure>
+
+        <section class="spec-card" aria-labelledby="spec-title">
+          <h2 id="spec-title">Rango ideal del rábano</h2>
+          <dl>
+            <div class="spec-row"><dt>Temperatura</dt><dd>20–25 °C</dd></div>
+            <div class="spec-row"><dt>Humedad del aire</dt><dd>60–80 %</dd></div>
+            <div class="spec-row"><dt>Humedad de la tierra</dt><dd>60–65 %</dd></div>
+            <div class="spec-row"><dt>Sol pleno</dt><dd>≥ 6 h/día</dd></div>
+          </dl>
+        </section>
+      </div>
+
+      <p class="brand-foot">RadishSoftware · UPAEP · Agile Project Management</p>
+    </section>
+
+    <section class="login-panel">
+      <div class="login-card">
+        <header>
+          <p class="eyebrow">Acceso al vivero</p>
+          <h2>Inicia sesión</h2>
+          <p class="muted">Entra con tu usuario o tu correo.</p>
+        </header>
+
+        <div id="login-notice" class="notice notice-info" role="status" hidden></div>
+
+        <form id="login-form" class="login-form" novalidate>
+          <div class="field">
+            <label for="login">Usuario o correo</label>
+            <input class="input" id="login" name="login" type="text" autocomplete="username"
+                   autocapitalize="none" spellcheck="false" placeholder="productor o productor@correo.com" required>
+          </div>
+
+          <div class="field">
+            <label for="password">Contraseña</label>
+            <div class="input-affix">
+              <input class="input" id="password" name="password" type="password"
+                     autocomplete="current-password" required>
+              <button class="affix-btn" id="toggle-password" type="button"
+                      aria-label="Mostrar contraseña" aria-pressed="false"></button>
+            </div>
+          </div>
+
+          <div id="login-error" class="notice notice-crit" role="alert" hidden></div>
+
+          <button class="btn btn-primary btn-block" id="login-submit" type="submit">
+            <span class="btn-label">Entrar</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+        </form>
+
+        <p class="login-help">¿No puedes entrar? Pide ayuda al Administrador del vivero.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
