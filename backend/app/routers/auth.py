@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.database import get_db
-from app.dependencies import get_current_user, utcnow
+from app.dependencies import ALL_ROLES, require_roles, utcnow
 from app.models import ErrorResponse, LoginRequest, LoginResponse, UserPublic
 from app.security import DUMMY_HASH, create_access_token, verify_password
 
@@ -109,7 +109,7 @@ async def login(
     description="Revoca la sesión actual: el token deja de servir de inmediato.",
 )
 async def logout(
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_roles(*ALL_ROLES)),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> Response:
     await db.execute(
@@ -127,5 +127,5 @@ async def logout(
     summary="Usuario de la sesión actual",
     description="Lo usa el frontend para saber el rol y armar el menú.",
 )
-async def me(user: dict = Depends(get_current_user)) -> UserPublic:
+async def me(user: dict = Depends(require_roles(*ALL_ROLES))) -> UserPublic:
     return to_public(user)

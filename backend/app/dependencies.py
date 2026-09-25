@@ -1,5 +1,5 @@
 """
-Dependencias de FastAPI para autenticar USUARIOS (AUTH-01).
+Dependencias de FastAPI para autenticar y autorizar USUARIOS (AUTH-01 / AUTH-02).
 
 get_current_user valida, en este orden:
   1. Que venga el header Authorization: Bearer <jwt>        → si no, 401 missing_token
@@ -10,11 +10,15 @@ get_current_user valida, en este orden:
 Si todo pasa, renueva last_seen_at y devuelve el usuario con el rol LEÍDO DE
 LA BD (no el del token).
 
+require_roles(*roles) (AUTH-02) corre ANTES del handler: si el rol no está en
+la lista responde 403 y la acción nunca se ejecuta. Las listas de roles son
+explícitas por endpoint; no se asume jerarquía entre roles.
+
 La autenticación de DISPOSITIVOS (header X-API-Key) sigue en app/auth.py.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, FrozenSet, Optional
 
 import aiosqlite
 from fastapi import Depends, HTTPException
@@ -32,6 +36,11 @@ bearer_scheme = HTTPBearer(
     scheme_name="BearerAuth",
     description="JWT obtenido en POST /api/v1/auth/login",
 )
+
+
+# Conjuntos de roles reutilizables por los endpoints (AUTH-02)
+ADMIN_ROLES = (Role.admin, Role.super_admin)
+ALL_ROLES = (Role.producer, Role.admin, Role.super_admin)
 
 
 def utcnow() -> datetime:
@@ -125,3 +134,50 @@ async def get_current_user(
         "greenhouse_id": row["greenhouse_id"],
         "session_id": session_id,
     }
+
+
+# ── Autorización por rol (AUTH-02) ─────────────────────────────────────
+
+def forbidden(message: str = "No tienes permiso para realizar esta acción.") -> HTTPException:
+    return HTTPException(status_code=403, detail={"error": "forbidden", "message": message})
+
+
+def require_roles(*roles: Role) -> Callable:
+    """Crea una dependencia que deja pasar solo a los roles indicados.
+
+    Uso:
+        @router.post("")
+        async def endpoint(user: dict = Depends(require_roles(*ADMIN_ROLES))): ...
+
+    La función devuelta guarda `allowed_roles` para que los tests puedan
+    comprobar que TODAS las rutas declaran explícitamente sus roles.
+    """
+    if not roles:
+        raise ValueError("require_roles necesita al menos un rol")
+    allowed: FrozenSet[Role] = frozenset(Role(role) for role in roles)
+
+    async def role_guard(user: dict = Depends(get_current_user)) -> dict:
+        if user["role"] not in allowed:
+            raise forbidden()
+        return user
+
+    role_guard.allowed_roles = allowed  # type: ignore[attr-defined]
+    return role_guard
+
+
+def ensure_greenhouse_access(user: dict, greenhouse_id: str) -> None:
+    """Un productor solo ve su vivero asignado; admin y super admin ven todos.
+
+    Mantiene aislados los datos agrícolas de otros viveros (AUTH-02). Lanza 403.
+    """
+    if user["role"] in ADMIN_ROLES:
+        return
+    if not user.get("greenhouse_id") or user["greenhouse_id"] != greenhouse_id:
+        raise forbidden("No tienes acceso a este vivero.")
+
+
+def visible_greenhouse(user: dict) -> Optional[str]:
+    """Vivero al que se limita un listado: None = todos (admins)."""
+    if user["role"] in ADMIN_ROLES:
+        return None
+    return user.get("greenhouse_id") or ""
