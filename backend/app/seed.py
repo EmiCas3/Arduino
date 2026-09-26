@@ -32,7 +32,7 @@ SEED_DEVICE = {
     "device_id": "pi-vivero-01",
     "greenhouse_id": "vivero-rabano-01",
     "type": "gateway",
-    "model": "Raspberry Pi 1 Model B+ v1.2",
+    "model": "Raspberry Pi 5",
     "location": "Mesa del laboratorio, junto al tanque",
 }
 

@@ -4,7 +4,7 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 
 | Item | Qué hace |
 |---|---|
-| MON-04 | Ingesta de lotes de lecturas desde la Raspberry Pi (`X-API-Key`) |
+| MON-04 | Ingesta de lotes de lecturas desde la Raspberry Pi (`X-API-Key`), validadas lectura por lectura y con `ts` en UTC |
 | AUTH-01 | Login con usuario o email, sesión con JWT y cierre por inactividad |
 | AUTH-02 | Control de acceso por rol en todas las rutas (401 / 403) |
 | CONF-05 | Registro de actuadores (bomba, ventilador, malla sombra, luz) |
@@ -57,10 +57,14 @@ nuevas se crean solas al arrancar.
 | `SMARTGREENAI_READING_STALE_MINUTES` | `15` | Una lectura más vieja que esto se marca `stale` |
 | `SMARTGREENAI_FRONTEND_DIR` | `../frontend` | Carpeta del frontend que se sirve en `/` |
 | `SMARTGREENAI_SEED_PASSWORD` | aleatoria | Contraseña conocida para los usuarios del seed (solo demo) |
+| `SMARTGREENAI_MIN_READING_TS` | `2026-01-01T00:00:00Z` | Lecturas con `ts` anterior se rechazan (una Pi sin hora cree que es 1970). Debe llevar zona horaria |
+| `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` | `300` | Segundos que un `ts` puede ir adelante del reloj del servidor antes de rechazarse |
 
 Puedes ponerlas en un archivo `.env` (está en `.gitignore`) o en la terminal:
 
 ```bash
+# CMD de Windows
+set SMARTGREENAI_JWT_SECRET=cambia-esto-por-algo-largo
 # PowerShell
 $env:SMARTGREENAI_JWT_SECRET = "cambia-esto-por-algo-largo"
 # bash
@@ -82,7 +86,21 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/readings/latest` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.1.0).
+El contrato completo está en `../openapi.yaml` (v1.2.0).
+
+### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
+
+- **Validación lectura por lectura.** Solo el sobre del lote (1 a 500
+  lecturas) da 422. Cada lectura inválida regresa en `rejected` con su índice
+  y motivo (`campo: motivo`), y las válidas del mismo lote se guardan.
+- **`ts` con zona horaria obligatoria** (`Z` o `-06:00`). Se guarda en UTC con
+  milisegundos: `2026-09-26T18:04:22.123+00:00`. El mismo instante escrito en
+  dos zonas cuenta como duplicado.
+- **Horas imposibles se rechazan:** antes de `SMARTGREENAI_MIN_READING_TS` o
+  más de `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` en el futuro.
+- **El backend nunca pone la hora de la lectura**; solo agrega `received_at`.
+- Los campos que el contrato no define (`bomba_activa`, `vent_activo`) se
+  ignoran hasta ACT-04.
 
 ### Ejemplos
 
@@ -109,11 +127,14 @@ curl -X PATCH http://localhost:8000/api/v1/actuators/malla-sombra-01 \
 curl http://localhost:8000/api/v1/greenhouses/vivero-rabano-01/readings/latest \
   -H "Authorization: Bearer <access_token>"
 
-# Ingesta desde la Pi (sin cambios respecto a MON-04)
+# Ingesta desde la Pi: ts con zona horaria; las lecturas malas van a "rejected"
 curl -X POST http://localhost:8000/api/v1/devices/pi-vivero-01/readings \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <api-key-del-seed>" \
-  -d '{"readings": [{"ts": "2026-09-13T21:04:22Z", "temp_c": 24.2, "suelo_pct": 62}]}'
+  -d '{"readings": [{"ts": "2026-09-13T21:04:22.123Z", "temp_c": 24.2, "suelo_pct": 62},
+                    {"ts": "2026-09-13T21:04:24", "temp_c": 24.3}]}'
+# → {"accepted": 1, "duplicates": 0,
+#    "rejected": [{"index": 1, "reason": "ts: sin zona horaria: agrega Z (UTC) o un desfase como -06:00"}]}
 ```
 
 ## Cómo funciona la seguridad
@@ -142,8 +163,8 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-112 tests: ingesta (9), login (22), roles (16), actuadores (44), últimas
-lecturas (13) y frontend (9).
+136 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (16), actuadores (44), últimas lecturas (13) y frontend (8).
 
 ## Estructura
 

@@ -9,9 +9,10 @@ Usa Pydantic v1 (compatible con MSYS2 Python sin Rust).
 
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, validator
 
@@ -53,12 +54,24 @@ class AlertaEnum(str, Enum):
 
 # ── Reading ────────────────────────────────────────────────────────────
 
+# AAAA-MM-DDThh:mm al inicio. Evita que Pydantic v1 acepte números
+# (1758900000) o textos numéricos como si fueran horas Unix.
+ISO_TS_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+
+
 class Reading(BaseModel):
-    """Una lectura del Arduino, enriquecida por la Pi con el timestamp."""
+    """Una lectura del Arduino, enriquecida por la Pi con el timestamp.
+
+    Los campos extra que manda el firmware y el contrato aún no define
+    (`bomba_activa`, `vent_activo`) se ignoran hasta ACT-04.
+    """
 
     ts: datetime = Field(
         ...,
-        description="Momento de la lectura en ISO 8601 UTC, asignado por la Pi",
+        description=(
+            "Momento de la lectura en ISO 8601 CON zona horaria, asignado por la "
+            "Pi. Se normaliza a UTC"
+        ),
     )
     ms: Optional[int] = Field(
         None,
@@ -95,13 +108,42 @@ class Reading(BaseModel):
     estado: Optional[EstadoEnum] = None
     alertas: Optional[List[AlertaEnum]] = None
 
+    @validator("ts", pre=True)
+    def _ts_es_texto_iso(cls, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value
+        if not isinstance(value, str) or not ISO_TS_REGEX.match(value.strip()):
+            raise ValueError("debe ser texto ISO 8601, por ejemplo 2026-09-26T18:04:22.123Z")
+        return value.strip()
+
+    @validator("ts")
+    def _ts_con_zona(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("sin zona horaria: agrega Z (UTC) o un desfase como -06:00")
+        return value.astimezone(timezone.utc)
+
 
 # ── Batch ──────────────────────────────────────────────────────────────
 
-class ReadingBatch(BaseModel):
-    """Lote de lecturas. La Pi manda de 1 a 500 por request."""
+def _readings_schema(schema: dict, model: Any) -> None:
+    """En /docs cada elemento de `readings` se muestra como una Reading."""
+    item = Reading.schema(ref_template="#/components/schemas/{model}")
+    item.pop("definitions", None)
+    schema["properties"]["readings"]["items"] = item
 
-    readings: List[Reading] = Field(..., min_items=1, max_items=500)
+
+class ReadingBatch(BaseModel):
+    """Lote de lecturas. La Pi manda de 1 a 500 por request.
+
+    Aquí solo se valida el SOBRE (de 1 a 500 elementos). Cada lectura se
+    valida por separado en el endpoint con `Reading`, para que una lectura
+    mala no tumbe el lote completo (validación parcial del contrato, MON-04).
+    """
+
+    readings: List[Any] = Field(..., min_items=1, max_items=500)
+
+    class Config:
+        schema_extra = staticmethod(_readings_schema)
 
 
 # ── Respuesta de ingesta ───────────────────────────────────────────────

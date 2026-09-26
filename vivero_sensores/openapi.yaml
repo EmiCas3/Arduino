@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.1.0
+  version: 1.2.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -11,6 +11,11 @@ info:
     **v1.1.0 (Sprint 2):** agrega sesiones de usuario (AUTH-01), control de
     acceso por rol (AUTH-02), registro de actuadores (CONF-05) y ultimas
     lecturas (DASH-01).
+
+    **v1.2.0 (Sprint 2):** ajuste de MON-04 para el gateway de la Pi (MON-03).
+    `ts` debe traer zona horaria y se guarda en UTC con milisegundos; se
+    rechazan horas imposibles (reloj sin sincronizar o del futuro) y la
+    validacion es lectura por lectura: una lectura mala ya no tumba el lote.
 
     ## Convenciones que no se negocian
 
@@ -23,7 +28,8 @@ info:
        los dos se puede recalcular el historico completo al recalibrar.
     3. **El timestamp lo pone la Pi, no el Arduino.** El campo `ms` del Arduino es
        milisegundos desde su boot y se reinicia en cada reset: sirve para detectar
-       reinicios, no para ordenar en el tiempo.
+       reinicios, no para ordenar en el tiempo. El backend nunca pone la hora de
+       la lectura (solo `received_at`) y guarda `ts` en UTC con milisegundos.
     4. **La ingesta recibe lotes.** La Pi solo tiene internet cuando la laptop esta
        encendida, asi que acumula en SQLite y sincroniza despues. Mandar de una en
        una rompe ese diseño.
@@ -177,6 +183,29 @@ paths:
         Validacion parcial: si algunas lecturas del lote son invalidas, las
         validas SI se guardan y las rechazadas se listan en `rejected` con su
         indice. Solo se devuelve 400 si el lote entero es ilegible.
+
+        Reglas de `ts` (v1.2.0):
+        - Obligatorio, texto ISO 8601 y **con zona horaria** (`Z` o `-06:00`).
+          Sin zona se rechaza: es ambiguo.
+        - Se normaliza a UTC con milisegundos: `2026-09-26T18:04:22.123+00:00`.
+          El mismo instante escrito en dos zonas cuenta como duplicado.
+        - Se rechaza si es anterior a `SMARTGREENAI_MIN_READING_TS`
+          (default 2026-01-01T00:00:00Z; una Pi sin hora cree que es 1970) o si
+          va mas de `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` (default 300) adelante
+          del reloj del servidor.
+
+        Motivos de `rejected` (texto `campo: motivo`):
+        - `ts: sin zona horaria ...`
+        - `ts: debe ser texto ISO 8601 ...` (tambien numeros u horas Unix)
+        - `ts: anterior a ...; el reloj del gateway no esta sincronizado`
+        - `ts: en el futuro, mas de 300 s adelante del servidor`
+        - `ts: field required`
+        - `<campo>: <error de validacion>`, por ejemplo `suelo_pct: ensure this
+          value is less than or equal to 100`
+        - `la lectura no es un objeto JSON`
+
+        Los campos que el contrato no define (hoy `bomba_activa` y `vent_activo`
+        del firmware) se ignoran sin rechazar la lectura.
       operationId: ingestReadings
       requestBody:
         required: true
@@ -209,6 +238,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '422':
+          description: |
+            El sobre del lote es invalido: `readings` falta, no es arreglo, esta
+            vacio o trae mas de 500 elementos. Nota: la implementacion actual
+            responde 422 (validacion de FastAPI) tambien en el caso que este
+            contrato marca como 413. Las lecturas individuales invalidas NO
+            generan 422: van en `rejected`.
 
   /greenhouses/{greenhouse_id}/readings:
     parameters:
@@ -623,9 +659,12 @@ components:
           type: string
           format: date-time
           description: |
-            Momento de la lectura en ISO 8601 UTC. Lo asigna la Raspberry Pi
-            al recibir la linea por Serial, NO el Arduino.
-          example: '2026-09-13T21:04:22Z'
+            Momento de la lectura en ISO 8601 con zona horaria. Lo asigna la
+            Raspberry Pi al recibir la linea por Serial, NO el Arduino, y solo
+            cuando su reloj esta sincronizado por NTP. El backend lo guarda en
+            UTC con milisegundos. Sin zona horaria, anterior a 2026-01-01 o mas
+            de 300 s en el futuro se rechaza (ver la ingesta).
+          example: '2026-09-13T21:04:22.123Z'
         ms:
           type: integer
           format: int64
@@ -814,7 +853,9 @@ components:
                 type: string
           example:
             - index: 44
-              reason: 'ts ausente o mal formado'
+              reason: 'ts: sin zona horaria: agrega Z (UTC) o un desfase como -06:00'
+            - index: 45
+              reason: 'suelo_pct: ensure this value is less than or equal to 100'
 
     Error:
       type: object
