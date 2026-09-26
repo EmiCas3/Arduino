@@ -35,3 +35,7 @@ PLAN_MON-03.md
 
 # Capturas y archivos que guarda la app de Claude (no son parte del proyecto)
 Claude outputs/
+
+# Gateway de la Pi (MON-03): API key y buffer local (ya los cubren .env y *.db)
+gateway/.env
+gateway/buffer.db*

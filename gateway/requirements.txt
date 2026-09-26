@@ -1,0 +1,3 @@
+# El gateway solo necesita pyserial; todo lo demás es librería estándar
+# (sqlite3, urllib, json). Nada que compilar.
+pyserial==3.5
