@@ -1,0 +1,23 @@
+# Servicio del backend SmartGreenAI (FastAPI: API + página web).
+# Plantilla: install.sh reemplaza @USER@ y @REPO@ y la copia a /etc/systemd/system/.
+[Unit]
+Description=SmartGreenAI backend (API + dashboard en el puerto 8000)
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@REPO@/backend
+# SMARTGREENAI_JWT_SECRET fijo y SMARTGREENAI_DB con ruta absoluta (lo crea install.sh)
+EnvironmentFile=@REPO@/backend/.env
+Environment=PYTHONUNBUFFERED=1
+# 0.0.0.0: se puede abrir desde otra computadora en http://<ip-de-la-pi>:8000
+ExecStart=@REPO@/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

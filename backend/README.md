@@ -46,6 +46,14 @@ para probar la API (botón **Authorize** → pega el `access_token` del login).
 Si ya tenías una `smartgreenai.db` de antes, no hay que borrarla: las tablas
 nuevas se crean solas al arrancar.
 
+## Correr en la Raspberry Pi 5
+
+En la demo, el backend corre en la misma Pi 5 que el gateway (MON-03), como
+servicio `smartgreenai-backend` en el puerto 8000. `deploy/pi5/install.sh` crea
+el venv, un `backend/.env` con `SMARTGREENAI_JWT_SECRET` fijo y la ruta de la
+BD, corre el seed y deja la API key del gateway en `gateway/.env`. La guía paso
+a paso desde cero está en [`../deploy/pi5/README.md`](../deploy/pi5/README.md).
+
 ## Variables de entorno
 
 | Variable | Default | Para qué |

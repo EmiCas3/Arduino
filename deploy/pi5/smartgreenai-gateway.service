@@ -1,0 +1,25 @@
+# Servicio del gateway SmartGreenAI (MON-03: Arduino → buffer SQLite → API).
+# Plantilla: install.sh reemplaza @USER@ y @REPO@ y la copia a /etc/systemd/system/.
+[Unit]
+Description=SmartGreenAI gateway (lee el Arduino y envía al backend)
+After=network.target smartgreenai-backend.service
+Wants=smartgreenai-backend.service
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+# dialout: permiso para leer /dev/ttyACM0 (el Arduino)
+SupplementaryGroups=dialout
+WorkingDirectory=@REPO@
+# La configuración (API key incluida) la lee el propio gateway de gateway/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@REPO@/gateway/.venv/bin/python -m gateway run
+# Siempre de vuelta: si el Arduino o el backend fallan, el buffer conserva todo.
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

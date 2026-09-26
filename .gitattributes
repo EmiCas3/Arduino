@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Scripts y servicios de la Raspberry Pi: siempre LF, aunque se editen en Windows
+*.sh      text eol=lf
+*.service text eol=lf

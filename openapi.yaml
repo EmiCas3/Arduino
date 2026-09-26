@@ -69,6 +69,12 @@ servers:
     description: Produccion (pendiente de definir host real)
   - url: http://localhost:8000/api/v1
     description: Desarrollo local
+  - url: http://{pi_host}:8000/api/v1
+    description: Raspberry Pi 5 del vivero (backend y gateway en la misma Pi)
+    variables:
+      pi_host:
+        default: smartgreen.local
+        description: Hostname o IP de la Pi en la red local
 
 tags:
   - name: devices
