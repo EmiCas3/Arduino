@@ -189,5 +189,3 @@ hacer un `ALTER TABLE` a mano.
 - Los errores salen como `{"detail": {"error", "message"}}`, pero el spec
   v1.0.0 documenta `{"error", "message"}` (ver la nota en `openapi.yaml`).
 - `test_batch_too_large` espera 422, pero el spec dice 413.
-- El spec publicado en SwaggerHub sigue en 1.0.0: hay que subir el
-  `openapi.yaml` 1.1.0 a mano.
