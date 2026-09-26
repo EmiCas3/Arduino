@@ -47,22 +47,22 @@
 #include <DHT.h>
 
 // ---------------- PINES ----------------
-#define PIN_DHT    2
-#define PIN_SUELO  A0
-#define PIN_NIVEL  A1
-#define PIN_LUZ    A2
+#define PIN_DHT 2
+#define PIN_SUELO A0
+#define PIN_NIVEL A1
+#define PIN_LUZ A2
 
 // Actuadores (via puente H L298N, logica Active HIGH)
-#define PIN_VENT   3    // Ventilador: IN1 del L298N (IN2 a GND)
-#define PIN_BOMBA  5    // Bomba de riego: IN3 del L298N (IN4 a GND)
+#define PIN_VENT 3  // Ventilador: IN1 del L298N (IN2 a GND)
+#define PIN_BOMBA 5 // Bomba de riego: IN3 del L298N (IN4 a GND)
 
 DHT dht(PIN_DHT, DHT11);
 
 // ---------------- CALIBRACION ----------------
-const int SUELO_EN_AIRE = 555;   // medido
-const int SUELO_EN_AGUA = 267;   // medido
-const int NIVEL_VACIO   = 0;     // medido (oscila 0-6)
-const int NIVEL_LLENO   = 200;   // medido
+const int SUELO_EN_AIRE = 555; // medido
+const int SUELO_EN_AGUA = 267; // medido
+const int NIVEL_VACIO = 0;     // medido (oscila 0-6)
+const int NIVEL_LLENO = 200;   // medido
 
 // Rango valido POR SENSOR, no global. El nivel puede leer 0 de forma
 // legitima (tanque vacio); el suelo no: si lee casi 0 esta desconectado.
@@ -73,49 +73,49 @@ const int NIVEL_MAX_VALIDO = 1013;
 
 // ---------------- UMBRALES DEL RABANO ----------------
 // Temperatura del aire (C)
-const float TEMP_IDEAL_MIN  = 20.0;
-const float TEMP_IDEAL_MAX  = 25.0;
+const float TEMP_IDEAL_MIN = 20.0;
+const float TEMP_IDEAL_MAX = 25.0;
 const float TEMP_LIMITE_MIN = 6.0;
 const float TEMP_LIMITE_MAX = 30.0;
 
 // Humedad relativa del aire (%)
-const float HUMA_IDEAL_MIN  = 60.0;
-const float HUMA_IDEAL_MAX  = 80.0;
+const float HUMA_IDEAL_MIN = 60.0;
+const float HUMA_IDEAL_MAX = 80.0;
 const float HUMA_LIMITE_MIN = 50.0;
 const float HUMA_LIMITE_MAX = 85.0;
 
 // Humedad de la tierra (% en la escala calibrada aire=0 / agua=100)
-const int SUELO_IDEAL_MIN  = 60;
-const int SUELO_IDEAL_MAX  = 65;
+const int SUELO_IDEAL_MIN = 60;
+const int SUELO_IDEAL_MAX = 65;
 const int SUELO_LIMITE_MIN = 50;
 const int SUELO_LIMITE_MAX = 80;
 
 // Nivel del tanque (%)
-const int NIVEL_PCT_AVISO   = 50;   // mitad
-const int NIVEL_PCT_CRITICO = 25;   // un cuarto -> ademas bloquea la bomba
+const int NIVEL_PCT_AVISO = 50;   // mitad
+const int NIVEL_PCT_CRITICO = 25; // un cuarto -> ademas bloquea la bomba
 
 // Luz. El sensor no esta calibrado en lux, asi que se trabaja sobre una
 // escala normalizada "mas alto = mas luz" (ver LUZ_INVERTIDA).
-const bool LUZ_INVERTIDA    = true;  // true si al tapar el sensor el raw SUBE
-const int  LUZ_UMBRAL_DIA   = 250;   // arriba de esto se considera de dia
-const int  LUZ_HISTERESIS   = 40;    // margen para que no parpadee al atardecer
-const int  LUZ_UMBRAL_SOL   = 600;   // arriba de esto cuenta como sol pleno
-const unsigned int SOL_MIN_REQUERIDO = 360;          // 6 h en minutos
-const unsigned long SOMBRA_MAX_MS    = 30UL * 60000; // 30 min sin sol pleno
+const bool LUZ_INVERTIDA = true; // true si al tapar el sensor el raw SUBE
+const int LUZ_UMBRAL_DIA = 250;  // arriba de esto se considera de dia
+const int LUZ_HISTERESIS = 40;   // margen para que no parpadee al atardecer
+const int LUZ_UMBRAL_SOL = 600;  // arriba de esto cuenta como sol pleno
+const unsigned int SOL_MIN_REQUERIDO = 360;       // 6 h en minutos
+const unsigned long SOMBRA_MAX_MS = 30UL * 60000; // 30 min sin sol pleno
 
 // ---------------- CONFIG ----------------
-const unsigned long INTERVALO_MS = 2000;  // el DHT11 no admite menos de 2s
+const unsigned long INTERVALO_MS = 2000; // el DHT11 no admite menos de 2s
 unsigned long ultimaLectura = 0;
 
 // Severidad
 const byte OK = 0, AVISO = 1, ALERTA = 2;
 
 // ---------------- ESTADO DEL CICLO DE LUZ ----------------
-bool          esDia           = false;
-bool          huboDiaCompleto = false;  // ya se cerro al menos un dia
-unsigned long solHoyMs        = 0;      // sol pleno acumulado del dia actual
-unsigned long sombraMs        = 0;      // rato continuo sin sol pleno, de dia
-int           solPrevMin      = -1;     // minutos de sol del dia anterior
+bool esDia = false;
+bool huboDiaCompleto = false; // ya se cerro al menos un dia
+unsigned long solHoyMs = 0;   // sol pleno acumulado del dia actual
+unsigned long sombraMs = 0;   // rato continuo sin sol pleno, de dia
+int solPrevMin = -1;          // minutos de sol del dia anterior
 
 // ---------------- ESTADO DE LA LINEA ACTUAL ----------------
 byte severidad = OK;
@@ -131,7 +131,7 @@ void setup() {
 
   Serial.begin(9600);
   dht.begin();
-  delay(2000);  // el DHT11 tarda en estabilizarse al arrancar
+  delay(2000); // el DHT11 tarda en estabilizarse al arrancar
 }
 
 // Convierte un valor crudo (0-1023) a porcentaje 0-100.
@@ -145,16 +145,18 @@ bool lecturaValida(int crudo, int minValido, int maxValido) {
 }
 
 // ---------------- IMPRESION DE CAMPOS ----------------
-void campoFloat(const __FlashStringHelper* nombre, float valor, int decimales) {
+void campoFloat(const __FlashStringHelper *nombre, float valor, int decimales) {
   Serial.print(F(",\""));
   Serial.print(nombre);
   Serial.print(F("\":"));
-  if (isnan(valor)) Serial.print(F("null"));
-  else              Serial.print(valor, decimales);
+  if (isnan(valor))
+    Serial.print(F("null"));
+  else
+    Serial.print(valor, decimales);
 }
 
 // pct < 0 significa lectura invalida -> null
-void campoAnalogico(const __FlashStringHelper* nombre, int crudo, int pct) {
+void campoAnalogico(const __FlashStringHelper *nombre, int crudo, int pct) {
   Serial.print(F(",\""));
   Serial.print(nombre);
   Serial.print(F("_raw\":"));
@@ -163,24 +165,28 @@ void campoAnalogico(const __FlashStringHelper* nombre, int crudo, int pct) {
   Serial.print(F(",\""));
   Serial.print(nombre);
   Serial.print(F("_pct\":"));
-  if (pct < 0) Serial.print(F("null"));
-  else         Serial.print(pct);
+  if (pct < 0)
+    Serial.print(F("null"));
+  else
+    Serial.print(pct);
 }
 
-void campoBool(const __FlashStringHelper* nombre, bool valor) {
+void campoBool(const __FlashStringHelper *nombre, bool valor) {
   Serial.print(F(",\""));
   Serial.print(nombre);
   Serial.print(F("\":"));
   Serial.print(valor ? F("true") : F("false"));
 }
 
-void alerta(const __FlashStringHelper* codigo, byte nivel) {
-  if (!primeraAlerta) Serial.print(',');
+void alerta(const __FlashStringHelper *codigo, byte nivel) {
+  if (!primeraAlerta)
+    Serial.print(',');
   Serial.print('"');
   Serial.print(codigo);
   Serial.print('"');
   primeraAlerta = false;
-  if (nivel > severidad) severidad = nivel;
+  if (nivel > severidad)
+    severidad = nivel;
 }
 
 // ---------------- CICLO DIA / NOCHE ----------------
@@ -211,38 +217,57 @@ void actualizarCicloDeLuz(int luzNivel) {
 
 // ---------------- EVALUACION AGRONOMICA ----------------
 void evaluarTemperatura(float t) {
-  if (isnan(t))                   alerta(F("FALLA_DHT"), ALERTA);
-  else if (t > TEMP_LIMITE_MAX)   alerta(F("TEMP_ALTA"), ALERTA);
-  else if (t < TEMP_LIMITE_MIN)   alerta(F("TEMP_BAJA"), ALERTA);
-  else if (t > TEMP_IDEAL_MAX)    alerta(F("TEMP_ALTA_LEVE"), AVISO);
-  else if (t < TEMP_IDEAL_MIN)    alerta(F("TEMP_BAJA_LEVE"), AVISO);
+  if (isnan(t))
+    alerta(F("FALLA_DHT"), ALERTA);
+  else if (t > TEMP_LIMITE_MAX)
+    alerta(F("TEMP_ALTA"), ALERTA);
+  else if (t < TEMP_LIMITE_MIN)
+    alerta(F("TEMP_BAJA"), ALERTA);
+  else if (t > TEMP_IDEAL_MAX)
+    alerta(F("TEMP_ALTA_LEVE"), AVISO);
+  else if (t < TEMP_IDEAL_MIN)
+    alerta(F("TEMP_BAJA_LEVE"), AVISO);
 }
 
 void evaluarHumedadAire(float h) {
-  if (isnan(h)) return;  // ya lo reporto FALLA_DHT
-  if (h > HUMA_LIMITE_MAX)        alerta(F("HUM_AIRE_ALTA"), ALERTA);
-  else if (h < HUMA_LIMITE_MIN)   alerta(F("HUM_AIRE_BAJA"), ALERTA);
-  else if (h > HUMA_IDEAL_MAX)    alerta(F("HUM_AIRE_ALTA_LEVE"), AVISO);
-  else if (h < HUMA_IDEAL_MIN)    alerta(F("HUM_AIRE_BAJA_LEVE"), AVISO);
+  if (isnan(h))
+    return; // ya lo reporto FALLA_DHT
+  if (h > HUMA_LIMITE_MAX)
+    alerta(F("HUM_AIRE_ALTA"), ALERTA);
+  else if (h < HUMA_LIMITE_MIN)
+    alerta(F("HUM_AIRE_BAJA"), ALERTA);
+  else if (h > HUMA_IDEAL_MAX)
+    alerta(F("HUM_AIRE_ALTA_LEVE"), AVISO);
+  else if (h < HUMA_IDEAL_MIN)
+    alerta(F("HUM_AIRE_BAJA_LEVE"), AVISO);
 }
 
 void evaluarSuelo(int pct) {
-  if (pct < 0)                    alerta(F("FALLA_SUELO"), ALERTA);
-  else if (pct > SUELO_LIMITE_MAX) alerta(F("SUELO_ENCHARCADO"), ALERTA);
-  else if (pct < SUELO_LIMITE_MIN) alerta(F("SUELO_SECO"), ALERTA);
-  else if (pct > SUELO_IDEAL_MAX)  alerta(F("SUELO_HUMEDO_LEVE"), AVISO);
-  else if (pct < SUELO_IDEAL_MIN)  alerta(F("SUELO_SECO_LEVE"), AVISO);
+  if (pct < 0)
+    alerta(F("FALLA_SUELO"), ALERTA);
+  else if (pct > SUELO_LIMITE_MAX)
+    alerta(F("SUELO_ENCHARCADO"), ALERTA);
+  else if (pct < SUELO_LIMITE_MIN)
+    alerta(F("SUELO_SECO"), ALERTA);
+  else if (pct > SUELO_IDEAL_MAX)
+    alerta(F("SUELO_HUMEDO_LEVE"), AVISO);
+  else if (pct < SUELO_IDEAL_MIN)
+    alerta(F("SUELO_SECO_LEVE"), AVISO);
 }
 
 void evaluarNivel(int pct) {
-  if (pct < 0)                       alerta(F("FALLA_NIVEL"), ALERTA);
-  else if (pct <= NIVEL_PCT_CRITICO) alerta(F("TANQUE_UN_CUARTO"), ALERTA);
-  else if (pct <= NIVEL_PCT_AVISO)   alerta(F("TANQUE_MITAD"), AVISO);
+  if (pct < 0)
+    alerta(F("FALLA_NIVEL"), ALERTA);
+  else if (pct <= NIVEL_PCT_CRITICO)
+    alerta(F("TANQUE_UN_CUARTO"), ALERTA);
+  else if (pct <= NIVEL_PCT_AVISO)
+    alerta(F("TANQUE_MITAD"), AVISO);
 }
 
 void evaluarLuz() {
   if (esDia) {
-    if (sombraMs >= SOMBRA_MAX_MS) alerta(F("SOMBRA_PROLONGADA"), AVISO);
+    if (sombraMs >= SOMBRA_MAX_MS)
+      alerta(F("SOMBRA_PROLONGADA"), AVISO);
   } else if (huboDiaCompleto && solPrevMin < (int)SOL_MIN_REQUERIDO) {
     // Solo de noche y solo si ya se cerro un dia completo: de otro modo
     // se alertaria de falta de sol a las 7 de la mañana, cuando todavia
@@ -252,20 +277,23 @@ void evaluarLuz() {
 }
 
 void loop() {
-  if (millis() - ultimaLectura < INTERVALO_MS) return;
+  if (millis() - ultimaLectura < INTERVALO_MS)
+    return;
   ultimaLectura = millis();
 
   // ---- lectura ----
-  float tempC    = dht.readTemperature();
-  float humAire  = dht.readHumidity();
-  int   sueloRaw = analogRead(PIN_SUELO);
-  int   nivelRaw = analogRead(PIN_NIVEL);
-  int   luzRaw   = analogRead(PIN_LUZ);
+  float tempC = dht.readTemperature();
+  float humAire = dht.readHumidity();
+  int sueloRaw = analogRead(PIN_SUELO);
+  int nivelRaw = analogRead(PIN_NIVEL);
+  int luzRaw = analogRead(PIN_LUZ);
 
   int sueloPct = lecturaValida(sueloRaw, SUELO_MIN_VALIDO, SUELO_MAX_VALIDO)
-                 ? aPorcentaje(sueloRaw, SUELO_EN_AIRE, SUELO_EN_AGUA) : -1;
+                     ? aPorcentaje(sueloRaw, SUELO_EN_AIRE, SUELO_EN_AGUA)
+                     : -1;
   int nivelPct = lecturaValida(nivelRaw, NIVEL_MIN_VALIDO, NIVEL_MAX_VALIDO)
-                 ? aPorcentaje(nivelRaw, NIVEL_VACIO, NIVEL_LLENO) : -1;
+                     ? aPorcentaje(nivelRaw, NIVEL_VACIO, NIVEL_LLENO)
+                     : -1;
 
   int luzNivel = LUZ_INVERTIDA ? (1023 - luzRaw) : luzRaw;
   actualizarCicloDeLuz(luzNivel);
@@ -273,9 +301,9 @@ void loop() {
   // ---- decisiones (se recomiendan, la nube y el productor deciden) ----
   // Fail-safe: si el nivel esta bajo O el sensor fallo, la bomba no arranca.
   bool bombaHabilitada = (nivelPct > NIVEL_PCT_CRITICO);
-  bool riegoSugerido   = (sueloPct >= 0 && sueloPct < SUELO_LIMITE_MIN);
+  bool riegoSugerido = (sueloPct >= 0 && sueloPct < SUELO_LIMITE_MIN);
   // La ventilacion es constante: BASE siempre, ALTA si hay calor o bochorno.
-  bool ventAlta = (!isnan(tempC)   && tempC   > TEMP_IDEAL_MAX) ||
+  bool ventAlta = (!isnan(tempC) && tempC > TEMP_IDEAL_MAX) ||
                   (!isnan(humAire) && humAire > HUMA_IDEAL_MAX);
 
   // ---- control fisico de actuadores (L298N, HIGH = encendido) ----
@@ -290,7 +318,7 @@ void loop() {
   Serial.print(F("{\"ms\":"));
   Serial.print(millis());
 
-  campoFloat(F("temp_c"),       tempC,   1);
+  campoFloat(F("temp_c"), tempC, 1);
   campoFloat(F("hum_aire_pct"), humAire, 1);
   campoAnalogico(F("suelo"), sueloRaw, sueloPct);
   campoAnalogico(F("nivel"), nivelRaw, nivelPct);
@@ -306,12 +334,14 @@ void loop() {
   Serial.print(F(",\"sol_min_hoy\":"));
   Serial.print(solHoyMs / 60000UL);
   Serial.print(F(",\"sol_min_prev\":"));
-  if (solPrevMin < 0) Serial.print(F("null"));
-  else                Serial.print(solPrevMin);
+  if (solPrevMin < 0)
+    Serial.print(F("null"));
+  else
+    Serial.print(solPrevMin);
 
-  campoBool(F("riego_sugerido"),   riegoSugerido);
+  campoBool(F("riego_sugerido"), riegoSugerido);
   campoBool(F("bomba_habilitada"), bombaHabilitada);
-  campoBool(F("bomba_activa"),     bombaActiva);
+  campoBool(F("bomba_activa"), bombaActiva);
   Serial.print(F(",\"vent\":\""));
   Serial.print(ventAlta ? F("ALTA") : F("BASE"));
   Serial.print('"');
@@ -326,7 +356,9 @@ void loop() {
   evaluarNivel(nivelPct);
   evaluarLuz();
   Serial.print(F("],\"estado\":\""));
-  Serial.print(severidad == OK ? F("OK") : (severidad == AVISO ? F("AVISO") : F("ALERTA")));
+  Serial.print(severidad == OK
+                   ? F("OK")
+                   : (severidad == AVISO ? F("AVISO") : F("ALERTA")));
   Serial.println(F("\"}"));
 }
 
@@ -360,7 +392,8 @@ void loop() {
 
   3. LUZ_UMBRAL_DIA y LUZ_UMBRAL_SOL
      Con LUZ_INVERTIDA ya correcto, anota luz_nivel en tres momentos:
-       - cuarto a oscuras (noche)      -> el umbral de dia va bien arriba de esto
+       - cuarto a oscuras (noche)      -> el umbral de dia va bien arriba de
+  esto
        - sombra o interior con luz     -> entre los dos umbrales
        - vivero a pleno sol            -> LUZ_UMBRAL_SOL va un poco abajo
      Sin esto, sol_min_hoy cuenta mal y SOL_INSUFICIENTE es ruido.
