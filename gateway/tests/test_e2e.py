@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import closing
 import socket
 import sqlite3
 import subprocess
@@ -91,7 +92,7 @@ class Backend:
             self.proc = None
 
     def stored_ts(self) -> list:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             return [r[0] for r in conn.execute("SELECT ts FROM readings ORDER BY ts")]
 
     def latest(self) -> dict:

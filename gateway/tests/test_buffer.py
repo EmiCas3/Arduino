@@ -88,3 +88,31 @@ def test_two_connections_can_open_the_same_buffer(tmp_path):
     assert len(b.next_batch(10)) == 1
     a.close()
     b.close()
+
+
+def test_simultaneous_first_open_does_not_fail(tmp_path):
+    """El servicio arrancando y un `status` crean el buffer a la vez.
+
+    Cambiar a WAL pide un candado exclusivo que SQLite no espera: sin reintento,
+    uno de los dos fallaba con "database is locked".
+    """
+    import threading
+
+    for round_ in range(30):
+        path = tmp_path / f"b{round_}.db"
+        barrier = threading.Barrier(3)
+        errors = []
+
+        def open_close():
+            barrier.wait()
+            try:
+                Buffer(path).close()
+            except Exception as exc:  # pragma: no cover - es lo que se prueba
+                errors.append(exc)
+
+        threads = [threading.Thread(target=open_close) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []

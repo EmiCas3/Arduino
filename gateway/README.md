@@ -159,7 +159,7 @@ para la prueba de punta a punta):
 python -m pytest gateway\tests -q
 ```
 
-63 pruebas: lector Serial (17), reloj (11), buffer (9), configuración (11),
+64 pruebas: lector Serial (17), reloj (11), buffer (10), configuración (11),
 envío (12) y 3 de punta a punta contra el **backend real** (uvicorn en un
 subproceso): lecturas que llegan a `/readings/latest`, backend apagado y
 prendido con las horas originales, y reloj sin sincronizar que no manda nada

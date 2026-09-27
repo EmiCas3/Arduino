@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -55,13 +56,28 @@ class Buffer:
         if str(path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path), timeout=30)
-        # Cambiar a WAL pide un candado exclusivo: solo se hace si hace falta
-        # (la primera vez), para que dos hilos puedan abrir el buffer a la vez.
-        if self.db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
-            self.db.execute("PRAGMA journal_mode=WAL")
+        self._enable_wal()
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(SCHEMA)
         self.db.commit()
+
+    def _enable_wal(self, attempts: int = 50) -> None:
+        """Activa WAL (lectores y escritor a la vez) solo si hace falta.
+
+        Cambiar el modo pide un candado exclusivo y SQLite NO espera por él:
+        si dos procesos crean el buffer al mismo tiempo (el servicio arrancando
+        y un `status`), uno recibe "database is locked". Se reintenta.
+        """
+        for attempt in range(attempts):
+            try:
+                mode = self.db.execute("PRAGMA journal_mode").fetchone()[0]
+                if mode.lower() != "wal":
+                    self.db.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.1)
 
     def close(self) -> None:
         self.db.close()
