@@ -62,14 +62,14 @@ DHT dht(PIN_DHT, DHT11);
 const int SUELO_EN_AIRE = 555; // medido
 const int SUELO_EN_AGUA = 267; // medido
 const int NIVEL_VACIO = 0;     // medido (oscila 0-6)
-const int NIVEL_LLENO = 200;   // medido
+const int NIVEL_LLENO = 150;   // medido
 
 // Rango valido POR SENSOR, no global. El nivel puede leer 0 de forma
 // legitima (tanque vacio); el suelo no: si lee casi 0 esta desconectado.
 const int SUELO_MIN_VALIDO = 100;
 const int SUELO_MAX_VALIDO = 1013;
 const int NIVEL_MIN_VALIDO = 0;
-const int NIVEL_MAX_VALIDO = 1013;
+const int NIVEL_MAX_VALIDO = 150;
 
 // ---------------- UMBRALES DEL RABANO ----------------
 // Temperatura del aire (C)
