@@ -69,7 +69,7 @@ const int NIVEL_LLENO = 150;   // medido
 const int SUELO_MIN_VALIDO = 100;
 const int SUELO_MAX_VALIDO = 1013;
 const int NIVEL_MIN_VALIDO = 0;
-const int NIVEL_MAX_VALIDO = 150;
+const int NIVEL_MAX_VALIDO = 1013;
 
 // ---------------- UMBRALES DEL RABANO ----------------
 // Temperatura del aire (C)
