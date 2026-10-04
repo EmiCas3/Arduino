@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.2.0
+  version: 1.3.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -16,6 +16,11 @@ info:
     `ts` debe traer zona horaria y se guarda en UTC con milisegundos; se
     rechazan horas imposibles (reloj sin sincronizar o del futuro) y la
     validacion es lectura por lectura: una lectura mala ya no tumba el lote.
+
+    **v1.3.0 (Sprint 2):** soporte para los widgets del dashboard (DASH-01).
+    Agrega `GET /greenhouses` (viveros que el usuario puede consultar), el campo
+    `area` en las ultimas lecturas y el header opcional `X-SG-Background` para
+    que el refresco automatico del dashboard no renueve la sesion.
 
     ## Convenciones que no se negocian
 
@@ -40,6 +45,16 @@ info:
     - **Usuarios** (dashboard): `Authorization: Bearer <jwt>` obtenido en
       `POST /auth/login`. La sesion se cierra tras 30 min sin actividad
       (configurable) y dura como maximo 8 h.
+
+    ### Refresco en segundo plano (`X-SG-Background`)
+
+    Cada request con sesion cuenta como actividad y renueva el plazo de
+    inactividad. El dashboard pide lecturas solo cada 15 s: si eso contara, una
+    pestaña abierta mantendria la sesion viva para siempre. Por eso sus
+    refrescos automaticos mandan `X-SG-Background: 1`: el servidor valida la
+    sesion igual (401 si ya vencio) pero **no** la renueva. El header vale en
+    cualquier endpoint con sesion y nunca da mas acceso. Cualquier otro valor
+    se ignora.
 
     ## Roles
 
@@ -523,6 +538,32 @@ paths:
 
   # ── Sprint 2: ultimas lecturas (DASH-01) ──────────────────────────────
 
+  /greenhouses:
+    get:
+      tags: [readings]
+      summary: Viveros que el usuario puede consultar
+      description: |
+        Lista los viveros con al menos un dispositivo registrado. Un `producer`
+        recibe solo su vivero asignado (o una lista vacia si no tiene);
+        `admin` y `super_admin` reciben todos. Lo usa el dashboard para que un
+        Administrador, que no tiene vivero asignado, elija cual ver.
+      operationId: listGreenhouses
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Background'
+      responses:
+        '200':
+          description: Viveros visibles para el usuario, ordenados por id
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GreenhouseSummary'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+
   /greenhouses/{greenhouse_id}/readings/latest:
     parameters:
       - name: greenhouse_id
@@ -530,15 +571,20 @@ paths:
         required: true
         schema:
           type: string
+      - $ref: '#/components/parameters/Background'
     get:
       tags: [readings]
       summary: Ultimas lecturas de un vivero
       description: |
-        Ultimo valor NO nulo de cada medicion con unidad, antiguedad y bandera
-        `stale` (mas vieja que `SMARTGREENAI_READING_STALE_MINUTES`, 15 por
-        defecto). `sensor_down` indica que la lectura mas reciente del vivero
-        llego con ese sensor en `null`. Un `producer` solo consulta su vivero
-        asignado. Si el vivero no tiene lecturas responde `has_data: false`.
+        Ultimo valor NO nulo de cada medicion con unidad, area, antiguedad y
+        bandera `stale` (mas vieja que `SMARTGREENAI_READING_STALE_MINUTES`,
+        15 por defecto). `sensor_down` indica que la lectura mas reciente del
+        vivero llego con ese sensor en `null`. Un `producer` solo consulta su
+        vivero asignado. Si el vivero no tiene lecturas responde
+        `has_data: false`.
+
+        Es lo que consumen los widgets del dashboard, que la piden cada 15 s
+        con `X-SG-Background: 1`.
       operationId: getLatestReadings
       security:
         - BearerAuth: []
@@ -581,6 +627,16 @@ components:
       schema:
         type: string
         pattern: '^[a-z0-9][a-z0-9-]{2,49}$'
+    Background:
+      name: X-SG-Background
+      in: header
+      required: false
+      description: |
+        Mandar `1` en los refrescos automaticos del dashboard: la request se
+        valida igual, pero no renueva el plazo de inactividad de la sesion.
+      schema:
+        type: string
+        enum: ['1']
     ActuatorId:
       name: actuator_id
       in: path
@@ -1083,6 +1139,32 @@ components:
         device_location:
           type: string
           nullable: true
+        area:
+          type: string
+          description: |
+            Area del vivero a la que pertenece la medicion. El prototipo es un
+            solo ambiente, asi que hoy siempre vale
+            `SMARTGREENAI_DEFAULT_AREA` (`general`, igual que los actuadores).
+            Cuando exista el registro de sensores por area (CONF-04) traera
+            el area real.
+          example: general
+
+    GreenhouseSummary:
+      type: object
+      required: [greenhouse_id, devices]
+      properties:
+        greenhouse_id:
+          type: string
+          example: vivero-rabano-01
+        devices:
+          type: integer
+          description: Dispositivos registrados en el vivero
+          example: 1
+        last_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Ultima vez que uno de sus dispositivos envio lecturas
 
     LatestReadingSummary:
       type: object

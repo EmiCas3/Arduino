@@ -1,7 +1,8 @@
 # SmartGreenAI — Frontend
 
 Interfaz web del vivero de rábano. Hoy cubre **AUTH-01** (login), la parte
-de UI de **AUTH-02** (menú por rol) y muestra los actuadores de **CONF-05**.
+de UI de **AUTH-02** (menú por rol), los widgets de lecturas en vivo de
+**DASH-01** y muestra los actuadores de **CONF-05**.
 
 Es **HTML + CSS + JavaScript sin framework ni paso de build** (decisión D1 = A
 del plan del Sprint 2). FastAPI sirve esta carpeta desde el mismo origen que
@@ -32,8 +33,12 @@ frontend/
 │   ├── roles.js      → rol → secciones del menú y pantalla de inicio
 │   ├── login.js      → lógica del login
 │   ├── panel.js      → vistas: Mi vivero, Configuración, Plataforma
+│   ├── dashboard.js  → DASH-01: tarjetas en vivo, refresco cada 15 s
+│   ├── metrics.js    → DASH-01: estados y textos (lógica pura, sin DOM)
 │   ├── theme.js      → tema claro/oscuro
 │   └── ui.js         → h() para crear nodos de forma segura, íconos, fechas
+├── tests/
+│   └── metrics.test.mjs → pruebas de metrics.js con `node --test` (opcional)
 └── assets/
     ├── favicon.svg
     └── fonts/        → Bricolage Grotesque, Instrument Sans, IBM Plex Mono (OFL)
@@ -52,6 +57,56 @@ frontend/
 - **Colores solo desde tokens** de `:root`. El tema oscuro redefine tokens,
   nunca estilos sueltos.
 - **Fuentes locales** en `assets/fonts`: la demo funciona sin internet.
+- **Lo que una vista deja corriendo, lo detiene.** Si una vista arranca un
+  intervalo (como los widgets), guarda su función de paro en `state.cleanup`;
+  `route()` la llama al cambiar de sección.
+
+## Widgets de "Estado actual" (DASH-01)
+
+"Mi vivero" muestra el último valor de cada sensor con su unidad, área,
+"hace N s" y su estado. Los datos salen de
+`GET /greenhouses/{id}/readings/latest`.
+
+| Estado | Cuándo | De dónde sale |
+|---|---|---|
+| Sin datos | Nunca ha llegado un valor | `value: null` |
+| Sensor caído | La última lectura trae ese sensor en `null`; se enseña el último valor válido, atenuado | `sensor_down` |
+| Dato viejo | Más viejo que `stale_after_minutes` | `stale`, y la edad que avanza en el navegador |
+| Alerta / Aviso | El Arduino marcó una alerta para esa medición | `last_reading.alertas` |
+| Normal | Nada de lo anterior | — |
+
+Se muestra uno solo, en ese orden de prioridad. Un `null` nunca se pinta como 0.
+
+- **El estado lo decide el Arduino, no el navegador.** `metrics.js` solo
+  traduce los códigos de alerta del firmware (`TEMP_ALTA`, `SUELO_SECO_LEVE`,
+  `TANQUE_MITAD`…) a la tarjeta y severidad que les toca. No hay umbrales
+  copiados en JavaScript: si el firmware cambia un umbral, el dashboard lo
+  refleja solo. Cuando existan CONF-06 y ALERT-01, el estado vendrá evaluado
+  del backend y solo cambia `metricState()`.
+- **Rangos de referencia** ("ideal 20–25 °C"): son texto de ayuda y viven en
+  un solo lugar, `METRICS` de `metrics.js`. Agua y luz no muestran números
+  porque esos umbrales están en ajuste.
+- **Un código de alerta nuevo** que el dashboard no conozca no rompe nada: se
+  muestra tal cual en el resumen. Para darle tarjeta y texto, agrégalo a
+  `ALERTS`. (El backend sí rechaza lecturas con códigos fuera del contrato.)
+- **Refresco:** cada 15 s, solo con la pestaña visible, y al volver a ella.
+  "Hace N s" usa la edad que calcula el servidor más el tiempo transcurrido
+  en el navegador, así que no depende del reloj de la laptop.
+- **Sesión:** los refrescos automáticos mandan `X-SG-Background: 1` y el
+  servidor no los cuenta como actividad. Si la persona hizo clic, tecleó o
+  tocó la pantalla desde el refresco anterior, ese sí cuenta. Dejar el
+  dashboard abierto sin tocarlo cierra la sesión a los 30 min, como pide
+  AUTH-01.
+- **Sin conexión:** se conservan los últimos valores con un aviso y se
+  reintenta solo.
+- **Administradores:** no tienen vivero asignado; eligen uno de
+  `GET /greenhouses` (con un solo vivero se elige solo).
+
+Pruebas de la lógica (opcional, necesita Node 18 o más; no hay `npm install`):
+
+```bash
+node --test frontend/tests/metrics.test.mjs
+```
 
 ## Identidad visual
 
@@ -84,9 +139,9 @@ empezado con React + Vite.
 
 | Item | Qué hacer en el frontend | Costo extra vs React |
 |---|---|---|
-| DASH-01 widgets | Consumir `GET /greenhouses/{id}/readings/latest` en las fichas de "Estado actual" de `renderInicio()`. Refrescar cada 15 s con `setInterval` y pausar cuando la pestaña no está visible (`visibilitychange`). Usar `stale` y `sensor_down` para pintar el estado. | ~1 h (el polling y la limpieza del intervalo son manuales) |
-| ALERT-01 UI | Lista de alertas y contador en el menú. Crear `js/store.js` (ver abajo) para compartir las alertas entre el menú y la vista sin recargar. | ~1 h |
-| ACT-04 | Badge de estado por actuador (on / off / desconocido) reutilizando `equipIcon()` y `.pill`. | ~0.5 h |
+| DASH-01 widgets | ✅ Hecho: `dashboard.js` + `metrics.js` (ver "Widgets de Estado actual"). | ~1 h (el polling y la limpieza del intervalo son manuales) |
+| ALERT-01 UI | Lista de alertas y contador en el menú. Crear `js/store.js` (ver abajo) para compartir las alertas entre el menú y la vista sin recargar. Puede reutilizar el refresco de `dashboard.js`. | ~1 h |
+| ACT-04 | Badge de estado por actuador (on / off / desconocido) reutilizando `equipIcon()` y `.pill`, con el mismo refresco de 15 s. | ~0.5 h |
 
 ### Sprint 3 (historia y AI)
 

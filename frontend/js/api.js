@@ -6,6 +6,9 @@
  *   vencimiento): borra el token y regresa al login con el mensaje del servidor.
  * - 403 = el rol no tiene permiso. El control real está en el servidor; la UI
  *   solo muestra el aviso.
+ * - `background: true` marca un refresco automático (DASH-01) con el header
+ *   X-SG-Background: 1. El servidor lo valida igual pero NO lo cuenta como
+ *   actividad: una pestaña abierta no mantiene viva la sesión (AUTH-01).
  */
 import { clearSession, getToken, setFlash } from "./session.js";
 
@@ -33,9 +36,10 @@ export function goToLogin() {
   location.replace("login.html");
 }
 
-export async function apiFetch(path, { method = "GET", body, auth = true, params } = {}) {
+export async function apiFetch(path, { method = "GET", body, auth = true, params, background = false } = {}) {
   const headers = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (background) headers["X-SG-Background"] = "1";
   if (auth) {
     const token = getToken();
     if (token) headers.Authorization = `Bearer ${token}`;

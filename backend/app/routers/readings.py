@@ -10,12 +10,15 @@ Convención del spec: null = sensor caído. Por eso cada medición busca su
 último valor NO nulo, y `sensor_down` avisa cuando la lectura más reciente del
 vivero llegó con ese sensor en null.
 
+También lista los viveros que el usuario puede consultar (GET /greenhouses),
+para que un Administrador, que no tiene vivero asignado, elija cuál ver.
+
 Permisos (AUTH-02): todos los roles; un productor solo consulta su vivero.
 """
 
 import json
 from datetime import timedelta
-from typing import Optional
+from typing import List, Optional
 
 import aiosqlite
 from fastapi import APIRouter, Depends, Path
@@ -29,8 +32,15 @@ from app.dependencies import (
     parse_utc,
     require_roles,
     utcnow,
+    visible_greenhouse,
 )
-from app.models import ErrorResponse, LatestMetric, LatestReadings, LatestReadingSummary
+from app.models import (
+    ErrorResponse,
+    GreenhouseSummary,
+    LatestMetric,
+    LatestReadings,
+    LatestReadingSummary,
+)
 
 router = APIRouter(
     prefix="/greenhouses",
@@ -51,6 +61,42 @@ METRICS = (
 
 def _as_bool(value) -> Optional[bool]:
     return None if value is None else bool(value)
+
+
+@router.get(
+    "",
+    response_model=List[GreenhouseSummary],
+    responses={401: {"model": ErrorResponse}},
+    summary="Viveros que el usuario puede consultar",
+    description=(
+        "Un productor recibe solo su vivero asignado; admin y super admin, "
+        "todos los que tienen al menos un dispositivo registrado."
+    ),
+)
+async def list_greenhouses(
+    user: dict = Depends(require_roles(*ALL_ROLES)),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> List[GreenhouseSummary]:
+    only = visible_greenhouse(user)   # None = todos (admins)
+    where, params = ("", ()) if only is None else ("WHERE greenhouse_id = ?", (only,))
+    cursor = await db.execute(
+        f"""
+        SELECT greenhouse_id, COUNT(*) AS devices, MAX(last_seen_at) AS last_seen_at
+        FROM devices
+        {where}
+        GROUP BY greenhouse_id
+        ORDER BY greenhouse_id
+        """,
+        params,
+    )
+    return [
+        GreenhouseSummary(
+            greenhouse_id=row["greenhouse_id"],
+            devices=row["devices"],
+            last_seen_at=parse_utc(row["last_seen_at"]) if row["last_seen_at"] else None,
+        )
+        for row in await cursor.fetchall()
+    ]
 
 
 @router.get(
@@ -118,6 +164,7 @@ async def latest_readings(
             metrics.append(LatestMetric(
                 key=column, label=label, unit=unit,
                 stale=True, sensor_down=sensor_down,
+                area=settings.default_area,
             ))
             continue
 
@@ -134,6 +181,7 @@ async def latest_readings(
             sensor_down=sensor_down,
             device_id=row["device_id"],
             device_location=row["device_location"],
+            area=settings.default_area,
         ))
 
     return LatestReadings(

@@ -341,6 +341,13 @@ class LatestMetric(BaseModel):
     )
     device_id: Optional[str] = None
     device_location: Optional[str] = None
+    area: str = Field(
+        "general",
+        description=(
+            "Área del vivero a la que pertenece la medición. El prototipo es un "
+            "solo ambiente, así que hoy siempre es SMARTGREENAI_DEFAULT_AREA"
+        ),
+    )
 
 
 class LatestReadingSummary(BaseModel):
@@ -366,3 +373,13 @@ class LatestReadings(BaseModel):
     has_data: bool
     last_reading: Optional[LatestReadingSummary] = None
     metrics: List[LatestMetric]
+
+
+class GreenhouseSummary(BaseModel):
+    """Un vivero que el usuario puede consultar (selector del dashboard)."""
+
+    greenhouse_id: str = Field(..., example="vivero-rabano-01")
+    devices: int = Field(..., description="Dispositivos registrados en el vivero")
+    last_seen_at: Optional[datetime] = Field(
+        None, description="Última vez que uno de sus dispositivos envió lecturas"
+    )

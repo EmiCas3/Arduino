@@ -8,7 +8,7 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 | AUTH-01 | Login con usuario o email, sesión con JWT y cierre por inactividad |
 | AUTH-02 | Control de acceso por rol en todas las rutas (401 / 403) |
 | CONF-05 | Registro de actuadores (bomba, ventilador, malla sombra, luz) |
-| DASH-01 | API de últimas lecturas por vivero (la UI de widgets sigue pendiente) |
+| DASH-01 | API de últimas lecturas por vivero, lista de viveros y refresco en segundo plano para los widgets del dashboard |
 
 También sirve el frontend (`../frontend`) desde el mismo origen.
 
@@ -62,7 +62,8 @@ a paso desde cero está en [`../deploy/pi5/README.md`](../deploy/pi5/README.md).
 | `SMARTGREENAI_JWT_SECRET` | aleatorio al arrancar | Secreto para firmar los JWT. **Defínelo en la demo**: si no, las sesiones se cierran cada vez que reinicias el servidor |
 | `SMARTGREENAI_SESSION_IDLE_MINUTES` | `30` | Minutos sin actividad antes de cerrar la sesión |
 | `SMARTGREENAI_SESSION_MAX_HOURS` | `8` | Duración máxima de una sesión |
-| `SMARTGREENAI_READING_STALE_MINUTES` | `15` | Una lectura más vieja que esto se marca `stale` |
+| `SMARTGREENAI_READING_STALE_MINUTES` | `15` | Una lectura más vieja que esto se marca `stale`. En la Pi se usa `2` (la Pi manda cada 10 s) |
+| `SMARTGREENAI_DEFAULT_AREA` | `general` | Área que se reporta en las últimas lecturas. El prototipo es un solo ambiente; cuando exista CONF-04 vendrá del registro de sensores |
 | `SMARTGREENAI_FRONTEND_DIR` | `../frontend` | Carpeta del frontend que se sirve en `/` |
 | `SMARTGREENAI_SEED_PASSWORD` | aleatoria | Contraseña conocida para los usuarios del seed (solo demo) |
 | `SMARTGREENAI_MIN_READING_TS` | `2026-01-01T00:00:00Z` | Lecturas con `ts` anterior se rechazan (una Pi sin hora cree que es 1970). Debe llevar zona horaria |
@@ -91,10 +92,11 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/actuators` | Bearer | todos (productor: solo activos de su vivero) |
 | GET | `/actuators/{actuator_id}` | Bearer | todos (productor: solo activos de su vivero) |
 | PATCH | `/actuators/{actuator_id}` | Bearer | admin, super_admin |
+| GET | `/greenhouses` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/readings/latest` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.2.0).
+El contrato completo está en `../openapi.yaml` (v1.3.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -163,6 +165,11 @@ curl -X POST http://localhost:8000/api/v1/devices/pi-vivero-01/readings \
   la BD en cada request, nunca del token.
 - **Todas las rutas protegidas:** `tests/test_roles.py` recorre `app.routes`
   y falla si una ruta nueva no exige sesión ni declara roles.
+- **Refresco en segundo plano (DASH-01):** el dashboard pide lecturas solo
+  cada 15 s. Esas peticiones traen `X-SG-Background: 1`: se validan igual
+  (401 si la sesión ya venció) pero **no renuevan** `last_seen_at`. Sin eso,
+  una pestaña abierta mantendría viva la sesión para siempre y el cierre por
+  inactividad dejaría de funcionar. El header nunca da más acceso.
 
 ## Tests
 
@@ -171,8 +178,9 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-136 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (16), actuadores (44), últimas lecturas (13) y frontend (8).
+157 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (18), actuadores (44), últimas lecturas (13), soporte del
+dashboard (15) y frontend (12).
 
 ## Estructura
 
@@ -191,7 +199,7 @@ backend/
 │       ├── ingest.py    # POST readings (MON-04)
 │       ├── auth.py      # login / logout / me (AUTH-01)
 │       ├── actuators.py # CRUD sin DELETE de actuadores (CONF-05)
-│       └── readings.py  # últimas lecturas (DASH-01)
+│       └── readings.py  # viveros visibles y últimas lecturas (DASH-01)
 ├── tests/
 ├── requirements.txt
 └── README.md

@@ -68,6 +68,9 @@ else
 # Secreto fijo: las sesiones sobreviven a reinicios del servicio.
 SMARTGREENAI_JWT_SECRET=$SECRET
 SMARTGREENAI_DB=$REPO/backend/smartgreenai.db
+# La Pi manda lecturas cada 10 s: si pasan 2 min sin una nueva, el dashboard
+# la marca como "dato viejo" (el default del código son 15 min).
+SMARTGREENAI_READING_STALE_MINUTES=2
 ENV
     umask 022
     echo "Creado $BACKEND_ENV"

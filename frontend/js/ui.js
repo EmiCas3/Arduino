@@ -34,6 +34,12 @@ const ICONS = {
   list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l3.5-5"/><circle cx="12" cy="17" r="1.2"/>',
+  thermo: '<path d="M10 5a2 2 0 0 1 4 0v8.3a4 4 0 1 1-4 0z"/><path d="M12 9.5v6"/><circle cx="12" cy="16.5" r="1.1"/>',
+  wind: '<path d="M3 9h10.5A2.5 2.5 0 1 0 11 6.5"/><path d="M3 14h15a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 19h6"/>',
+  soil: '<path d="M12 12V6.5"/><path d="M12 9c0-2.4 1.8-4 4.8-4 0 2.4-1.8 4-4.8 4z"/><path d="M12 10.5c0-1.8-1.3-3-3.6-3 0 1.8 1.3 3 3.6 3z"/><path d="M3 15.5c2-1.4 4-1.4 6 0s4 1.4 6 0 4-1.4 6 0"/><path d="M3 19.5c2-1.4 4-1.4 6 0s4 1.4 6 0 4-1.4 6 0"/>',
+  refresh: '<path d="M20 11.5A8 8 0 0 0 5.6 7.2L4 9"/><path d="M4 4.5V9h4.5"/><path d="M4 12.5a8 8 0 0 0 14.4 4.3L20 15"/><path d="M20 19.5V15h-4.5"/>',
+  unplug: '<path d="M9 3.5v3.5M15 3.5v3.5"/><path d="M7 7h10v3.5a5 5 0 0 1-10 0z"/><path d="M12 15.5V20"/><path d="M4 4l16 16"/>',
+  cloudOff: '<path d="M7.5 18.5h9.8a3.7 3.7 0 0 0 .9-7.3A6 6 0 0 0 8 8.2"/><path d="M6.2 10.2a4.3 4.3 0 0 0 1.3 8.3"/><path d="M4 4l16 16"/>',
 };
 
 export function icon(name, extraClass = "") {

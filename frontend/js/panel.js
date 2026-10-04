@@ -2,7 +2,7 @@
  * Panel principal: shell con menú por rol (AUTH-02) y pantallas de inicio.
  *
  * Secciones (roles.js):
- *   #/inicio         todos           estado del vivero y equipos activos
+ *   #/inicio         todos           lecturas en vivo (DASH-01) y equipos activos
  *   #/configuracion  admin, super    actuadores registrados (CONF-05)
  *   #/plataforma     super           permisos por rol y módulos próximos
  *
@@ -10,6 +10,7 @@
  * servidor: si una llamada responde 403 se muestra el aviso y nada más.
  */
 import { apiFetch, ApiError } from "./api.js";
+import { mountLiveReadings } from "./dashboard.js";
 import { clearSession, loadSession, setFlash } from "./session.js";
 import {
   ACTUATOR_TYPES,
@@ -30,7 +31,13 @@ const crumb = document.getElementById("crumb");
 const backdrop = document.getElementById("backdrop");
 const menuBtn = document.getElementById("menu-btn");
 
-const state = { user: null, actuatorStatus: "active" };
+const state = {
+  user: null,
+  actuatorStatus: "active",
+  greenhouse: null,   // vivero elegido por un admin (los productores tienen el suyo)
+  cleanup: null,      // detiene lo que la vista actual dejó corriendo (refrescos)
+  viewToken: 0,       // cambia en cada navegación: descarta respuestas tardías
+};
 
 // ── Arranque ──────────────────────────────────────────────────────────
 
@@ -105,6 +112,13 @@ function currentSectionId() {
 
 function route() {
   setNavOpen(false);
+  // Al cambiar de sección se detiene el refresco de la anterior: sin esto
+  // quedarían intervalos pidiendo lecturas para una vista que ya no existe.
+  if (state.cleanup) {
+    state.cleanup();
+    state.cleanup = null;
+  }
+  state.viewToken += 1;
   const id = currentSectionId();
   const section = SECTIONS.find((s) => s.id === id);
 
@@ -175,36 +189,21 @@ function loadingLines(count = 3) {
 
 // ── Vista: Mi vivero ──────────────────────────────────────────────────
 
-// Rangos del firmware vivero_sensoresV2.ino; los valores en vivo llegan con
-// los widgets de DASH-01 (la API ya existe: /greenhouses/{id}/readings/latest).
-const METRIC_SLOTS = [
-  { label: "Temperatura", unit: "°C", ideal: "ideal 20–25" },
-  { label: "Humedad del aire", unit: "% HR", ideal: "ideal 60–80" },
-  { label: "Humedad de la tierra", unit: "%", ideal: "ideal 60–65" },
-  { label: "Nivel del tanque", unit: "%", ideal: "aviso ≤ 50 · crítico ≤ 25" },
-  { label: "Luz", unit: "0–1023", ideal: "sol pleno ≥ 600" },
-];
-
 function renderInicio() {
   const { user } = state;
   const greenhouse = user.greenhouse_id;
 
   const equipmentBody = h("div", {}, loadingLines());
-  const metrics = h("div", { class: "metrics" },
-    METRIC_SLOTS.map((m) => h("div", { class: "metric" },
-      h("span", { class: "metric-label" }, m.label),
-      h("div", { class: "metric-reading" },
-        h("span", { class: "metric-value", "aria-label": "Sin dato todavía" }, "—"),
-        h("span", { class: "metric-unit" }, m.unit)),
-      h("span", { class: "metric-ideal" }, m.ideal))));
+  const picker = h("div", { class: "greenhouse-picker" });
+  const liveBody = h("div", { class: "live" }, loadingLines());
 
   view.replaceChildren(
     pageHead({
       eyebrow: today(),
       title: `Hola, ${firstName(user)}`,
       text: greenhouse
-        ? "Este es el resumen de tu vivero. Desde aquí verás sus lecturas, alertas y equipos."
-        : "Desde aquí verás el estado de los viveros, sus lecturas y sus equipos.",
+        ? "Este es el resumen de tu vivero: sus lecturas en vivo y sus equipos."
+        : "Elige un vivero para ver sus lecturas en vivo y sus equipos.",
       meta: [
         rolePill(user.role),
         greenhouse
@@ -217,9 +216,9 @@ function renderInicio() {
         h("div", { class: "card-head" },
           h("div", {},
             h("h2", { id: "t-estado" }, "Estado actual"),
-            h("p", {}, "Las lecturas en vivo aparecerán aquí con los widgets del dashboard.")),
-          h("span", { class: "tag" }, "DASH-01 · widgets")),
-        metrics),
+            h("p", {}, "El último valor de cada sensor, cuándo se midió y si está en rango.")),
+          picker),
+        liveBody),
 
       h("section", { class: "card span-7", "aria-labelledby": "t-equipos" },
         cardHead("Equipos del vivero", "Actuadores registrados y activos. Son los que podrás controlar.", null, "t-equipos"),
@@ -238,7 +237,58 @@ function renderInicio() {
       ),
     ),
   );
+  startLiveReadings(liveBody, picker);
   loadEquipment(equipmentBody);
+}
+
+/** Arranca los widgets de DASH-01 en el vivero del usuario (o el que elija un admin). */
+async function startLiveReadings(body, picker) {
+  const token = state.viewToken;
+  const show = (greenhouseId) => {
+    if (state.cleanup) state.cleanup();
+    state.greenhouse = greenhouseId;
+    state.cleanup = mountLiveReadings(body, greenhouseId);
+  };
+
+  // Productor: su vivero asignado. El servidor lo vuelve a comprobar (403 si no es suyo).
+  if (state.user.greenhouse_id) {
+    show(state.user.greenhouse_id);
+    return;
+  }
+
+  let greenhouses;
+  try {
+    greenhouses = await apiFetch("/greenhouses");
+  } catch (error) {
+    if (token === state.viewToken) body.replaceChildren(errorNotice(error));
+    return;
+  }
+  if (token !== state.viewToken) return;   // ya se navegó a otra sección
+
+  if (!greenhouses.length) {
+    body.replaceChildren(h("div", { class: "empty" },
+      h("strong", {}, state.user.role === "producer"
+        ? "Tu usuario aún no tiene un vivero asignado."
+        : "Aún no hay viveros con dispositivos registrados."),
+      state.user.role === "producer"
+        ? "Pídele a un Administrador que te asigne uno."
+        : "Cuando se registre un gateway, su vivero aparecerá aquí."));
+    return;
+  }
+
+  const ids = greenhouses.map((g) => g.greenhouse_id);
+  const selected = ids.includes(state.greenhouse) ? state.greenhouse : ids[0];
+  if (ids.length > 1) {
+    const select = h("select", {
+      class: "input input-sm",
+      id: "greenhouse-select",
+      onchange: (event) => show(event.currentTarget.value),
+    }, ids.map((id) => h("option", { value: id, selected: id === selected }, id)));
+    picker.replaceChildren(h("label", { class: "sr-only", for: "greenhouse-select" }, "Vivero"), select);
+  } else {
+    picker.replaceChildren(h("span", { class: "pill pill-plain" }, icon("sprout", "icon-sm"), selected));
+  }
+  show(selected);
 }
 
 async function loadEquipment(container) {

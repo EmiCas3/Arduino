@@ -12,6 +12,8 @@ Variables:
     SMARTGREENAI_SESSION_MAX_HOURS     Duración máxima de una sesión aunque haya actividad (8)
     SMARTGREENAI_READING_STALE_MINUTES Minutos tras los cuales una lectura se marca como vieja (15)
     SMARTGREENAI_FRONTEND_DIR          Carpeta del frontend que sirve FastAPI (../frontend)
+    SMARTGREENAI_DEFAULT_AREA          Área que se reporta para las lecturas mientras no exista
+                                       el registro de sensores por área de CONF-04 (general)
     SMARTGREENAI_MIN_READING_TS        Lecturas con `ts` anterior a esto se rechazan
                                        (2026-01-01T00:00:00Z). Una Pi sin hora cree que es 1970
     SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS  Segundos que un `ts` puede ir adelante del
@@ -81,6 +83,12 @@ class Settings:
             "SMARTGREENAI_MIN_READING_TS", "2026-01-01T00:00:00Z"
         )
         self.max_clock_skew_seconds: int = _int_env("SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS", 300)
+
+        # El prototipo es un solo ambiente: todos los sensores están en la misma
+        # área. Es el mismo valor que usan los actuadores del seed.
+        self.default_area: str = (
+            os.environ.get("SMARTGREENAI_DEFAULT_AREA", "").strip() or "general"
+        )
 
         default_frontend = Path(__file__).resolve().parents[2] / "frontend"
         self.frontend_dir: Path = Path(

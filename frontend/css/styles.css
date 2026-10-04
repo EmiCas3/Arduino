@@ -812,22 +812,123 @@ code, .mono {
   border-style: dashed;
 }
 
-/* Lecturas: fichas de medición (placeholders hasta los widgets de DASH-01) */
+/* ── Lecturas en vivo (DASH-01) ─────────────────────────────────────── */
+
+.live { display: grid; gap: 14px; }
+.live-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+.live-hint, .live-actions { display: inline-flex; align-items: center; gap: 6px; }
+.live-actions { gap: 8px; }
+.live-updated { font-variant-numeric: tabular-nums; }
+.live-notice:empty, .reading-summary:empty { display: none; }
+
+.btn-sm {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius-s);
+  font-size: var(--step--1);
+}
+.input-sm { width: auto; max-width: 100%; min-height: 38px; padding: 0 10px; font-size: var(--step--1); }
+.greenhouse-picker:empty { display: none; }
+
+.reading-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+.reading-summary > .empty { flex: 1 1 100%; }
+.summary-when strong { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.summary-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill-warn { background: var(--warn-soft); color: var(--warn); }
+.pill-crit { background: var(--crit-soft); color: var(--crit); }
+
 .metrics {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
+/* Una tarjeta por sensor. El estado va en data-state y se comunica con
+   color, ícono Y texto (nunca solo con color). */
 .metric {
+  --m: var(--leaf);
+  --m-soft: var(--leaf-soft);
+  --m-ink: var(--leaf-strong);
+  container-type: inline-size;
   display: grid;
-  gap: 10px;
-  padding: 14px 16px;
-  border: 1px dashed var(--line-strong);
+  gap: 8px;
+  align-content: start;
+  padding: 13px 16px 12px;
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--m);
   border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.metric[data-state="warn"] { --m: var(--warn); --m-soft: var(--warn-soft); --m-ink: var(--warn); }
+.metric[data-state="crit"] {
+  --m: var(--crit);
+  --m-soft: var(--crit-soft);
+  --m-ink: var(--crit);
+  background: color-mix(in srgb, var(--crit-soft) 38%, var(--surface));
+}
+/* Sin dato confiable: viejo, sensor caído o sin lecturas. Se atenúa el valor. */
+.metric[data-state="stale"],
+.metric[data-state="down"],
+.metric[data-state="empty"] {
+  --m: var(--line-strong);
+  --m-soft: var(--surface-3);
+  --m-ink: var(--muted);
+  border-style: dashed;
+  border-top-style: solid;
   background: var(--surface-2);
 }
-.metric-label { font-size: var(--step--1); font-weight: 600; color: var(--ink-2); }
+.metric-loading { gap: 12px; border-top-color: var(--line); }
+
+.metric-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
+}
+.metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.metric-label .icon { color: var(--muted); }
+/* Tarjeta angosta (5 en fila): el estado baja a su propio renglón en todas,
+   para que no quede arriba en unas y abajo en otras según el largo del nombre. */
+@container (max-width: 270px) {
+  .metric-top { flex-direction: column; align-items: flex-start; }
+}
+.metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  background: var(--m-soft);
+  color: var(--m-ink);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.metric-pill .icon { width: 13px; height: 13px; stroke-width: 2.2; }
 .metric-reading { display: flex; align-items: baseline; gap: 6px; }
 .metric-unit {
   font-family: var(--font-mono);
@@ -840,15 +941,38 @@ code, .mono {
   font-size: 1.9rem;
   font-weight: 650;
   line-height: 1;
-  color: var(--faint);
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
-.metric-ideal {
-  font-family: var(--font-mono);
+.metric[data-state="stale"] .metric-value,
+.metric[data-state="down"] .metric-value,
+.metric[data-state="empty"] .metric-value { color: var(--faint); }
+.metric-detail {
+  font-size: var(--step--1);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--m-ink);
+}
+.metric-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
   font-size: 0.75rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.metric-age { color: var(--ink-2); font-weight: 600; }
+.metric-age:empty { display: none; }
+.metric-ideal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.metric-ideal > :empty { display: none; }
 
 /* Listas de equipos y permisos */
 .list { list-style: none; margin: 0; padding: 0; display: grid; }

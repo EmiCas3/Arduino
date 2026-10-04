@@ -10,6 +10,13 @@ get_current_user valida, en este orden:
 Si todo pasa, renueva last_seen_at y devuelve el usuario con el rol LEÍDO DE
 LA BD (no el del token).
 
+Refresco en segundo plano (DASH-01): el dashboard pide datos solo cada 15 s.
+Esas peticiones traen el header `X-SG-Background: 1` y pasan por las MISMAS
+validaciones, pero NO renuevan last_seen_at. Sin eso, una pestaña abierta
+mantendría viva la sesión para siempre y el cierre por inactividad de AUTH-01
+dejaría de funcionar. El header solo puede quitar la renovación, nunca dar
+más acceso: mentir con él solo hace que la sesión venza antes.
+
 require_roles(*roles) (AUTH-02) corre ANTES del handler: si el rol no está en
 la lista responde 403 y la acción nunca se ejecuta. Las listas de roles son
 explícitas por endpoint; no se asume jerarquía entre roles.
@@ -21,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, FrozenSet, Optional
 
 import aiosqlite
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import settings
@@ -41,6 +48,9 @@ bearer_scheme = HTTPBearer(
 # Conjuntos de roles reutilizables por los endpoints (AUTH-02)
 ADMIN_ROLES = (Role.admin, Role.super_admin)
 ALL_ROLES = (Role.producer, Role.admin, Role.super_admin)
+
+# Header con el que el frontend marca sus refrescos automáticos (DASH-01)
+BACKGROUND_HEADER = "X-SG-Background"
 
 
 def utcnow() -> datetime:
@@ -72,6 +82,7 @@ async def _revoke_session(db: aiosqlite.Connection, session_id: str, now: dateti
 
 
 async def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> dict:
@@ -119,11 +130,13 @@ async def get_current_user(
         await _revoke_session(db, session_id, now)
         raise unauthorized("session_expired", "Tu sesión terminó. Inicia sesión de nuevo.")
 
-    await db.execute(
-        "UPDATE sessions SET last_seen_at = ? WHERE session_id = ?",
-        (now.isoformat(), session_id),
-    )
-    await db.commit()
+    # Un refresco automático no es actividad del usuario: no renueva la sesión.
+    if request.headers.get(BACKGROUND_HEADER) != "1":
+        await db.execute(
+            "UPDATE sessions SET last_seen_at = ? WHERE session_id = ?",
+            (now.isoformat(), session_id),
+        )
+        await db.commit()
 
     return {
         "id": row["id"],

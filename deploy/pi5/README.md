@@ -93,7 +93,9 @@ Tarda unos minutos. Hace esto, en 7 pasos:
 3. Crea el entorno de Python del backend (`backend/.venv`).
 4. Crea el del gateway (`gateway/.venv`, solo `pyserial`).
 5. Crea `backend/.env` con un secreto JWT **fijo** (las sesiones ya no se
-   cierran al reiniciar) y la ruta de la base de datos.
+   cierran al reiniciar), la ruta de la base de datos y
+   `SMARTGREENAI_READING_STALE_MINUTES=2` (el dashboard marca un dato como
+   viejo a los 2 min sin lecturas nuevas).
 6. Corre el seed (usuarios `productor`, `admin` y `superadmin` con la
    contraseña que pusiste, el gateway `pi-vivero-01` y los actuadores) y
    **guarda la API key del gateway en `gateway/.env` automáticamente**.
@@ -125,8 +127,19 @@ Al final debe decir:
    N s` y `Enviadas` subiendo cada 10 s.
 
 2. En el navegador de la laptop abre `http://smartgreen.local:8000` (o con la
-   IP), entra como `productor` / `Rabano2026!` y revisa que las lecturas
-   cambien. En `http://smartgreen.local:8000/docs` está la API.
+   IP), entra como `productor` / `Rabano2026!`. En "Mi vivero" deben verse las
+   5 tarjetas (temperatura, humedad del aire, humedad de la tierra, nivel del
+   tanque y luz) con su valor, "hace N s" y su estado, y cambiar solas cada
+   15 s. En `http://smartgreen.local:8000/docs` está la API.
+
+> **Si la Pi se instaló antes de DASH-01**, su `backend/.env` no tiene el
+> ajuste de "dato viejo" (`install.sh` no toca un `.env` que ya existe).
+> Agrégalo una vez:
+>
+> ```bash
+> echo 'SMARTGREENAI_READING_STALE_MINUTES=2' >> ~/Arduino/backend/.env
+> sudo systemctl restart smartgreenai-backend
+> ```
 
 ## 6. Demo de los criterios de MON-03 (corte de red)
 
