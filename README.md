@@ -1,10 +1,9 @@
 # SmartGreenAI — Radish Crop
 
-Documentación de la API en SwaggerHub (v1.2.0, Sprint 2):
-https://app.swaggerhub.com/apis/upaep-9f5/smartgreenai-radish-crop-api/1.2.0
+Documentación de la API en SwaggerHub (v1.3.0, Sprint 2):
+https://app.swaggerhub.com/apis/upaep-9f5/smartgreenai-radish-crop-api/1.3.0
 
-La fuente oficial del contrato es `openapi.yaml` de este repositorio (v1.3.0;
-falta subirla a SwaggerHub, donde hoy está la 1.2.0).
+La fuente oficial del contrato es `openapi.yaml` de este repositorio (v1.3.0).
 
 | Carpeta | Qué hay | Cómo correrlo |
 |---|---|---|
