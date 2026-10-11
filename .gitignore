@@ -40,3 +40,4 @@ Claude outputs/
 # Gateway de la Pi (MON-03): API key y buffer local (ya los cubren .env y *.db)
 gateway/.env
 gateway/buffer.db*
+PLAN_Sprint2_Cierre.md
