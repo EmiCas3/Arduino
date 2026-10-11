@@ -442,3 +442,53 @@ class ActuatorLiveList(BaseModel):
         ..., description="Una confirmación más vieja que esto se muestra como unknown"
     )
     actuators: List[ActuatorLive]
+
+
+# ── Alertas (ALERT-01) ─────────────────────────────────────────────────
+
+class AlertDirection(str, Enum):
+    high = "high"   # por arriba del límite
+    low = "low"     # por abajo del límite
+
+
+class AlertState(str, Enum):
+    active = "active"
+    cleared = "cleared"
+
+
+class AlertOut(BaseModel):
+    """Una alerta: el Arduino reportó que una medición cruzó su límite."""
+
+    id: int
+    greenhouse_id: str
+    area: str = Field(..., example="general")
+    metric: str = Field(..., example="temp_c", description="Sensor (campo de la lectura)")
+    label: str = Field(..., example="Temperatura del aire")
+    unit: str = Field(..., example="°C")
+    device_id: str = Field(..., example="pi-vivero-01")
+    code: str = Field(..., example="TEMP_ALTA", description="Código que mandó el Arduino")
+    direction: AlertDirection
+    threshold: float = Field(..., example=30.0, description="Umbral que cruzó (del firmware)")
+    threshold_name: str = Field(..., example="TEMP_LIMITE_MAX")
+    comparison: str = Field(..., example=">", description="Cómo compara el firmware")
+    value: float = Field(..., example=31.2, description="Valor que la disparó")
+    reading_ts: datetime = Field(..., description="Hora de la medición que la disparó")
+    created_at: datetime = Field(..., description="Hora en que el backend la creó")
+    last_value: float
+    last_ts: datetime = Field(..., description="Última lectura que seguía fuera del límite")
+    worst_value: float
+    status: AlertState
+    cleared_at: Optional[datetime] = None
+    cleared_ts: Optional[datetime] = Field(None, description="Lectura con la que se cerró")
+    cleared_value: Optional[float] = None
+    duration_seconds: int = Field(..., description="Desde la medición hasta el cierre (o hasta ahora)")
+
+
+class AlertList(BaseModel):
+    greenhouse_id: str
+    generated_at: datetime
+    active_count: int
+    clear_after_seconds: int = Field(
+        ..., description="Segundos seguidos sin el código para cerrar una alerta"
+    )
+    alerts: List[AlertOut]

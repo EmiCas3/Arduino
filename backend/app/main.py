@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import close_db, init_db
-from app.routers import actuators, control
+from app.routers import actuators, alerts, control
 from app.routers import auth as auth_routes
 from app.routers import ingest, readings
 
@@ -34,7 +34,8 @@ app = FastAPI(
     description=(
         "Backend del vivero de rábanos: ingesta de lecturas (X-API-Key del "
         "gateway), sesiones de usuario con JWT, control de acceso por rol, "
-        "registro de actuadores, últimas lecturas y estado de los equipos."
+        "registro de actuadores, últimas lecturas, estado de los equipos y "
+        "alertas."
     ),
     lifespan=lifespan,
 )
@@ -54,6 +55,7 @@ app.include_router(auth_routes.router, prefix="/api/v1")
 app.include_router(actuators.router, prefix="/api/v1")
 app.include_router(readings.router, prefix="/api/v1")
 app.include_router(control.router, prefix="/api/v1")
+app.include_router(alerts.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

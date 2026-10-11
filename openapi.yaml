@@ -26,6 +26,10 @@ info:
     lectura acepta `bomba_activa` y `vent_activo` del firmware y
     `GET /greenhouses/{greenhouse_id}/actuators/status` devuelve cada equipo
     como `on`, `off`, `unavailable` o `unknown` (nunca `off` sin confirmacion).
+    Alertas (ALERT-01): los umbrales viven en el firmware; cuando el Arduino
+    manda un codigo de LIMITE, el backend crea una alerta (una sola mientras
+    la condicion siga) y `GET /greenhouses/{greenhouse_id}/alerts` la devuelve
+    con sensor, valor, umbral y hora.
 
     ## Convenciones que no se negocian
 
@@ -109,6 +113,8 @@ tags:
     description: Registro de actuadores (CONF-05)
   - name: control
     description: Estado de los equipos del vivero (ACT-04)
+  - name: alerts
+    description: Alertas por umbral del firmware (ALERT-01)
 
 security:
   - ApiKeyAuth: []
@@ -646,6 +652,73 @@ paths:
           $ref: '#/components/responses/SessionRequired'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  /greenhouses/{greenhouse_id}/alerts:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [alerts]
+      summary: Alertas del vivero (ALERT-01)
+      description: |
+        Los umbrales del rabano viven en el firmware (`vivero_sensoresV2.ino`):
+        el Arduino compara cada lectura y manda codigos. Con cada lote de la
+        ingesta, el backend convierte los **codigos de limite** en alertas:
+
+        | Codigo | Sensor | Umbral del firmware |
+        |---|---|---|
+        | `TEMP_ALTA` / `TEMP_BAJA` | `temp_c` | `> TEMP_LIMITE_MAX` / `< TEMP_LIMITE_MIN` |
+        | `HUM_AIRE_ALTA` / `HUM_AIRE_BAJA` | `hum_aire_pct` | `> HUMA_LIMITE_MAX` / `< HUMA_LIMITE_MIN` |
+        | `SUELO_ENCHARCADO` / `SUELO_SECO` | `suelo_pct` | `> SUELO_LIMITE_MAX` / `< SUELO_LIMITE_MIN` |
+        | `TANQUE_UN_CUARTO` | `nivel_pct` | `<= NIVEL_PCT_CRITICO` |
+
+        - Se crea en la misma peticion de ingesta en que llega la lectura,
+          con sensor, dispositivo, valor, umbral (numero y constante) y hora.
+        - Mientras el codigo siga llegando se actualiza la MISMA alerta
+          (`last_value`, `worst_value`): no hay duplicados.
+        - Se cierra cuando el codigo lleva `SMARTGREENAI_ALERT_CLEAR_SECONDS`
+          (60) seguidos sin llegar. Un aviso `*_LEVE` cuenta como "de vuelta".
+        - Los avisos (`*_LEVE`, `TANQUE_MITAD`, `SOMBRA_PROLONGADA`,
+          `SOL_INSUFICIENTE`) y las fallas (`FALLA_*`) no crean alertas.
+
+        Orden: primero las activas, luego las mas recientes. Todos los roles;
+        un `producer` solo su vivero.
+      operationId: listAlerts
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, cleared, all]
+            default: all
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Alertas del vivero
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertList'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
 components:
 
@@ -1359,6 +1432,110 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ActuatorLive'
+
+    # ── Sprint 2: alertas (ALERT-01) ──────────────────────────────────
+
+    AlertOut:
+      type: object
+      required: [id, greenhouse_id, area, metric, label, unit, device_id, code, direction,
+                 threshold, threshold_name, comparison, value, reading_ts, created_at,
+                 last_value, last_ts, worst_value, status, duration_seconds]
+      properties:
+        id:
+          type: integer
+        greenhouse_id:
+          type: string
+        area:
+          type: string
+          example: general
+        metric:
+          type: string
+          enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct]
+          description: Sensor (campo de la lectura)
+        label:
+          type: string
+          example: Temperatura del aire
+        unit:
+          type: string
+          example: °C
+        device_id:
+          type: string
+          example: pi-vivero-01
+        code:
+          type: string
+          example: TEMP_ALTA
+          description: Codigo de limite que mando el Arduino
+        direction:
+          type: string
+          enum: [high, low]
+        threshold:
+          type: number
+          example: 30.0
+          description: Umbral que cruzo, tal como esta en el firmware
+        threshold_name:
+          type: string
+          example: TEMP_LIMITE_MAX
+        comparison:
+          type: string
+          enum: ['>', '<', '<=']
+          description: Como compara el firmware
+        value:
+          type: number
+          example: 31.2
+          description: Valor que disparo la alerta
+        reading_ts:
+          type: string
+          format: date-time
+          description: Hora (UTC) de la medicion que la disparo
+        created_at:
+          type: string
+          format: date-time
+          description: Hora en que el backend la creo
+        last_value:
+          type: number
+        last_ts:
+          type: string
+          format: date-time
+          description: Ultima lectura que seguia fuera del limite
+        worst_value:
+          type: number
+        status:
+          type: string
+          enum: [active, cleared]
+        cleared_at:
+          type: string
+          format: date-time
+          nullable: true
+        cleared_ts:
+          type: string
+          format: date-time
+          nullable: true
+          description: Lectura con la que se cerro
+        cleared_value:
+          type: number
+          nullable: true
+        duration_seconds:
+          type: integer
+          description: Desde la medicion hasta el cierre (o hasta ahora)
+
+    AlertList:
+      type: object
+      required: [greenhouse_id, generated_at, active_count, clear_after_seconds, alerts]
+      properties:
+        greenhouse_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        active_count:
+          type: integer
+        clear_after_seconds:
+          type: integer
+          example: 60
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertOut'
 
     ErrorDetail:
       type: object

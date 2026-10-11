@@ -68,6 +68,7 @@ a paso desde cero está en [`../deploy/pi5/README.md`](../deploy/pi5/README.md).
 | `SMARTGREENAI_SEED_PASSWORD` | aleatoria | Contraseña conocida para los usuarios del seed (solo demo) |
 | `SMARTGREENAI_MIN_READING_TS` | `2026-01-01T00:00:00Z` | Lecturas con `ts` anterior se rechazan (una Pi sin hora cree que es 1970). Debe llevar zona horaria |
 | `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` | `300` | Segundos que un `ts` puede ir adelante del reloj del servidor antes de rechazarse |
+| `SMARTGREENAI_ALERT_CLEAR_SECONDS` | `60` | Segundos seguidos sin el código de límite para cerrar una alerta (ALERT-01) |
 
 Puedes ponerlas en un archivo `.env` (está en `.gitignore`) o en la terminal:
 
@@ -95,6 +96,7 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/readings/latest` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/actuators/status` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/alerts` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
 El contrato completo está en `../openapi.yaml` (v1.4.0).
@@ -111,9 +113,9 @@ El contrato completo está en `../openapi.yaml` (v1.4.0).
   más de `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` en el futuro.
 - **El backend nunca pone la hora de la lectura**; solo agrega `received_at`.
 - Los campos que el contrato no define se ignoran sin rechazar la lectura.
-- **Estado de los actuadores (ACT-04):** con cada lectura NUEVA, en orden de
-  hora, `bomba_activa` y `vent_activo` actualizan `actuator_states` de los
-  actuadores activos de ese gateway. Si eso fallara, las lecturas ya quedaron
+- **Después de guardar**, con cada lectura NUEVA y en orden de hora, se
+  actualiza el estado de los actuadores (ACT-04) y se evalúan las alertas
+  (ALERT-01). Si uno de esos pasos fallara, las lecturas ya quedaron
   guardadas y el lote se responde igual con 202 (el error va al log).
 
 ### Estado de los actuadores (ACT-04)
@@ -129,6 +131,27 @@ El contrato completo está en `../openapi.yaml` (v1.4.0).
 
 Un equipo sin confirmación **nunca** sale como `off`. "Encendido" es lo que el
 firmware ordenó en el pin: no mide si el motor gira.
+
+### Alertas (ALERT-01)
+
+Los umbrales del rábano viven en el firmware (`vivero_sensoresV2.ino`): el
+Arduino compara cada lectura y manda códigos. `app/alerts.py` convierte los
+**7 códigos de límite** en alertas con historia (`app/firmware.py` dice a qué
+sensor y umbral corresponde cada uno):
+
+- Se **crea** en la misma petición de ingesta (cuando el gateway recibe el
+  202, ya existe) con sensor, dispositivo, valor, umbral y hora.
+- Mientras el código siga llegando se **actualiza la misma** alerta: no hay
+  duplicados (índice único "una activa por sensor").
+- Se **cierra** cuando el código lleva `SMARTGREENAI_ALERT_CLEAR_SECONDS`
+  seguidos sin llegar. Un aviso `*_LEVE` cuenta como "de vuelta".
+- Los avisos y las fallas de sensor no crean alertas; un `null` no abre ni
+  cierra nada. Las lecturas atrasadas se ignoran.
+
+**Si Fernando cambia un umbral en el `.ino`**, `tests/test_firmware_mirror.py`
+falla y dice qué número actualizar en `CONSTANTS` de `app/firmware.py` (es
+una línea). El backend no vuelve a comparar valores: solo anota el número en
+la alerta.
 
 ### Ejemplos
 
@@ -196,10 +219,11 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-179 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (30, incluye el barrido de todas las rutas), actuadores
+222 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (32, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
-actuadores (18) y frontend (14).
+actuadores (18), alertas (36), espejo de umbrales del firmware (5) y
+frontend (14).
 
 ## Estructura
 
@@ -215,12 +239,15 @@ backend/
 │   ├── dependencies.py  # get_current_user, require_roles (USUARIOS)
 │   ├── seed.py          # Datos de demo
 │   ├── actuator_state.py # Estado reportado de cada actuador (ACT-04)
+│   ├── firmware.py      # Espejo de los umbrales del .ino (solo lectura)
+│   ├── alerts.py        # Motor de alertas (ALERT-01)
 │   └── routers/
 │       ├── ingest.py    # POST readings (MON-04)
 │       ├── auth.py      # login / logout / me (AUTH-01)
 │       ├── actuators.py # CRUD sin DELETE de actuadores (CONF-05)
 │       ├── readings.py  # viveros visibles y últimas lecturas (DASH-01)
-│       └── control.py   # estado de los equipos (ACT-04)
+│       ├── control.py   # estado de los equipos (ACT-04)
+│       └── alerts.py    # alertas del vivero (ALERT-01)
 ├── tests/
 ├── requirements.txt
 └── README.md
@@ -236,6 +263,7 @@ backend/
 | `sessions` | AUTH-01 | Timeout por inactividad, logout y revocación |
 | `actuators` | CONF-05 | Desactivar = `status='inactive'`; no hay DELETE |
 | `actuator_states` | ACT-04 | Último `bomba_activa` / `vent_activo` de cada actuador, con la hora de la lectura |
+| `alerts` | ALERT-01 | Una fila por alerta; índice único: a lo más una activa por sensor y vivero |
 
 No hay migraciones: las tablas se crean con `CREATE TABLE IF NOT EXISTS`. Si
 algún día cambia una tabla **existente**, habrá que borrar la BD local o

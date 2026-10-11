@@ -27,7 +27,7 @@ from pydantic import ValidationError
 
 import aiosqlite
 
-from app import actuator_state
+from app import actuator_state, alerts
 from app.auth import verify_api_key
 from app.config import settings
 from app.database import get_db
@@ -103,7 +103,8 @@ async def ingest_readings(
     4. Las válidas: INSERT OR IGNORE → contar accepted/duplicates.
     5. Actualizar last_seen_at del device si se guardó algo.
     6. Con las lecturas NUEVAS (no duplicadas), en orden de hora: estado de
-       los actuadores (ACT-04).
+       los actuadores (ACT-04) y alertas (ALERT-01). Cuando el gateway recibe
+       el 202, la alerta ya existe.
     7. Retornar 202 con IngestResult.
     """
     device_id = device["device_id"]
@@ -198,7 +199,7 @@ async def ingest_readings(
 
     if new_readings:
         new_readings.sort(key=lambda item: item[0])
-        await _after_store(db, device_id, new_readings, now)
+        await _after_store(db, device_id, greenhouse_id, new_readings, now)
 
     return IngestResult(
         accepted=accepted,
@@ -210,13 +211,14 @@ async def ingest_readings(
 async def _after_store(
     db: aiosqlite.Connection,
     device_id: str,
+    greenhouse_id: str,
     new_readings: List[Tuple[str, Reading]],
     now: str,
 ) -> None:
     """Lo que se deriva de las lecturas ya guardadas.
 
-    Si algo de aquí falla, las lecturas ya están guardadas y el lote se
-    responde igual con 202: un error en el estado de los equipos no debe
+    Cada paso se guarda por separado. Si uno falla, las lecturas ya están
+    guardadas y el lote se responde igual con 202: un error aquí no debe
     hacer que el gateway reintente el lote para siempre. Se registra en el log.
     """
     try:
@@ -225,3 +227,10 @@ async def _after_store(
     except Exception:
         await db.rollback()
         logger.exception("No se pudo actualizar el estado de los actuadores de %s", device_id)
+
+    try:
+        await alerts.evaluate(db, device_id, greenhouse_id, new_readings, now)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("No se pudieron evaluar las alertas de %s", device_id)

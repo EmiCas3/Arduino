@@ -150,6 +150,40 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
             device_id   TEXT NOT NULL,
             updated_at  TEXT NOT NULL
         );
+
+        -- ALERT-01: alertas creadas a partir de los codigos de LIMITE que
+        -- manda el Arduino (los umbrales viven en el firmware). A lo mas UNA
+        -- activa por medicion y vivero: mientras la condicion siga, se
+        -- actualiza la misma fila (no hay duplicados). Las horas *_ts son de
+        -- la lectura (UTC, ms); *_at son del servidor.
+        CREATE TABLE IF NOT EXISTS alerts (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            greenhouse_id  TEXT NOT NULL,
+            area           TEXT NOT NULL,
+            metric         TEXT NOT NULL,
+            device_id      TEXT NOT NULL REFERENCES devices(device_id),
+            code           TEXT NOT NULL,
+            direction      TEXT NOT NULL CHECK(direction IN ('low','high')),
+            threshold      REAL NOT NULL,
+            threshold_name TEXT NOT NULL,
+            value          REAL NOT NULL,
+            reading_ts     TEXT NOT NULL,
+            created_at     TEXT NOT NULL,
+            last_value     REAL NOT NULL,
+            last_ts        TEXT NOT NULL,
+            worst_value    REAL NOT NULL,
+            evaluated_ts   TEXT NOT NULL,
+            clear_since    TEXT,
+            status         TEXT NOT NULL DEFAULT 'active'
+                           CHECK(status IN ('active','cleared')),
+            cleared_at     TEXT,
+            cleared_ts     TEXT,
+            cleared_value  REAL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_alerts_one_active
+            ON alerts(greenhouse_id, area, metric) WHERE status = 'active';
+        CREATE INDEX IF NOT EXISTS ix_alerts_greenhouse
+            ON alerts(greenhouse_id, status, reading_ts);
     """)
     await _db.commit()
     return _db

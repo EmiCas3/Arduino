@@ -18,6 +18,8 @@ Variables:
                                        (2026-01-01T00:00:00Z). Una Pi sin hora cree que es 1970
     SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS  Segundos que un `ts` puede ir adelante del
                                        reloj del servidor antes de rechazarse (300)
+    SMARTGREENAI_ALERT_CLEAR_SECONDS   Segundos seguidos sin el código de límite para
+                                       cerrar una alerta (60)
 """
 
 import logging
@@ -83,6 +85,10 @@ class Settings:
             "SMARTGREENAI_MIN_READING_TS", "2026-01-01T00:00:00Z"
         )
         self.max_clock_skew_seconds: int = _int_env("SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS", 300)
+
+        # ALERT-01: una alerta se cierra cuando su condición lleva este tiempo
+        # sin repetirse (evita duplicados si el valor brinca junto al límite).
+        self.alert_clear_seconds: int = _int_env("SMARTGREENAI_ALERT_CLEAR_SECONDS", 60)
 
         # El prototipo es un solo ambiente: todos los sensores están en la misma
         # área. Es el mismo valor que usan los actuadores del seed.
