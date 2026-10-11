@@ -1003,6 +1003,46 @@ code, .mono {
 .equip-icon.type-light { background: var(--warn-soft); color: var(--warn); }
 .equip-icon.type-shade { background: var(--surface-3); color: var(--ink-2); }
 
+/* Estado de los equipos (ACT-04). Se comunica con color, ícono Y texto.
+   "Desconocido" va sin relleno y con borde punteado: nunca parece apagado. */
+.equip-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+.equip-row .list-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.power-col { display: grid; justify-items: end; gap: 4px; text-align: right; }
+.power {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.power .icon { width: 14px; height: 14px; stroke-width: 2.2; }
+.power[data-power="on"] { background: var(--leaf-soft); color: var(--leaf-strong); }
+.power[data-power="on"] .icon { color: var(--leaf); }
+.power[data-power="off"] { background: var(--surface-3); color: var(--ink-2); }
+.power[data-power="unavailable"] { background: var(--warn-soft); color: var(--warn); }
+.power[data-power="unknown"] { background: transparent; color: var(--muted); border: 1px dashed var(--line-strong); }
+.power-note {
+  max-width: 26ch;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.power-note:empty { display: none; }
+.equipment > .empty { list-style: none; }
+@media (max-width: 560px) {
+  .equip-row { grid-template-columns: auto minmax(0, 1fr); }
+  .power-col { grid-column: 2; justify-items: start; text-align: left; }
+}
+
 .channel {
   font-family: var(--font-mono);
   font-size: 0.75rem;

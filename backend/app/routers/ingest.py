@@ -18,14 +18,16 @@ Reglas del timestamp (ajuste de MON-04, Sprint 2):
 """
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends
 from pydantic import ValidationError
 
 import aiosqlite
 
+from app import actuator_state
 from app.auth import verify_api_key
 from app.config import settings
 from app.database import get_db
@@ -38,6 +40,7 @@ from app.models import (
 )
 
 router = APIRouter(prefix="/devices", tags=["ingest"])
+logger = logging.getLogger("smartgreenai.ingest")
 
 
 def utc_ms(ts: datetime) -> str:
@@ -99,7 +102,9 @@ async def ingest_readings(
        válido. Si falla, va a `rejected` con su índice y motivo.
     4. Las válidas: INSERT OR IGNORE → contar accepted/duplicates.
     5. Actualizar last_seen_at del device si se guardó algo.
-    6. Retornar 202 con IngestResult.
+    6. Con las lecturas NUEVAS (no duplicadas), en orden de hora: estado de
+       los actuadores (ACT-04).
+    7. Retornar 202 con IngestResult.
     """
     device_id = device["device_id"]
     greenhouse_id = device["greenhouse_id"]
@@ -109,6 +114,7 @@ async def ingest_readings(
     accepted = 0
     duplicates = 0
     rejected: List[RejectedReading] = []
+    new_readings: List[Tuple[str, Reading]] = []   # (ts UTC con ms, lectura)
 
     for idx, raw in enumerate(batch.readings):
         if not isinstance(raw, dict):
@@ -173,6 +179,7 @@ async def ingest_readings(
 
             if cursor.rowcount > 0:
                 accepted += 1
+                new_readings.append((utc_ms(reading.ts), reading))
             else:
                 duplicates += 1
 
@@ -189,8 +196,32 @@ async def ingest_readings(
         )
         await db.commit()
 
+    if new_readings:
+        new_readings.sort(key=lambda item: item[0])
+        await _after_store(db, device_id, new_readings, now)
+
     return IngestResult(
         accepted=accepted,
         duplicates=duplicates,
         rejected=rejected,
     )
+
+
+async def _after_store(
+    db: aiosqlite.Connection,
+    device_id: str,
+    new_readings: List[Tuple[str, Reading]],
+    now: str,
+) -> None:
+    """Lo que se deriva de las lecturas ya guardadas.
+
+    Si algo de aquí falla, las lecturas ya están guardadas y el lote se
+    responde igual con 202: un error en el estado de los equipos no debe
+    hacer que el gateway reintente el lote para siempre. Se registra en el log.
+    """
+    try:
+        await actuator_state.apply_readings(db, device_id, new_readings, now)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("No se pudo actualizar el estado de los actuadores de %s", device_id)

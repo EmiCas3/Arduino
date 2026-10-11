@@ -16,10 +16,12 @@ const source = await readFile(new URL("../js/metrics.js", import.meta.url), "utf
 const {
   ALERTS,
   METRICS,
+  POWER_LABELS,
   alertsFor,
   formatAge,
   formatValue,
   metricState,
+  powerView,
   presentationFor,
   summarize,
   unknownAlerts,
@@ -159,4 +161,50 @@ test("resumen de la última lectura del Arduino", () => {
   assert.deepEqual(summarize(null), []);
   assert.deepEqual(summarize({ estado: "OK", alertas: [], riego_sugerido: false, bomba_habilitada: true, vent: "BASE", es_dia: false })
     .map((c) => c.text), ["Arduino: todo en rango", "Ventilación base", "De noche"]);
+});
+
+// ── Estado de los equipos (ACT-04) ─────────────────────────────────────
+
+const actuator = (overrides = {}) => ({
+  actuator_id: "bomba-riego-01", type: "pump", state: "on", reason: "reported",
+  detail: "Confirmado por el Arduino.", age_seconds: 5, reported_at: "2026-10-10T18:00:00Z",
+  ...overrides,
+});
+
+test("encendido y apagado confirmados dicen hace cuánto", () => {
+  const on = powerView(actuator(), 3, 120);
+  assert.equal(on.state, "on");
+  assert.equal(on.label, POWER_LABELS.on);
+  assert.equal(on.note, "Confirmado hace 8 s");
+  assert.equal(powerView(actuator({ state: "off" }), 0, 120).label, "Apagado");
+});
+
+test("la confirmación envejece en el navegador: pasa a desconocido, no a apagado", () => {
+  const view = powerView(actuator({ state: "off", age_seconds: 110 }), 15, 120);
+  assert.equal(view.state, "unknown");
+  assert.match(view.note, /Última confirmación hace 2 min/);
+});
+
+test("sin hora de confirmación nunca es encendido ni apagado", () => {
+  for (const state of ["on", "off"]) {
+    assert.equal(powerView(actuator({ state, age_seconds: null }), 0, 120).state, "unknown");
+  }
+});
+
+test("no disponible por tanque bajo conserva el motivo mientras sea reciente", () => {
+  const item = actuator({ state: "unavailable", reason: "tank_low", detail: "Tanque bajo." });
+  assert.equal(powerView(item, 0, 120).state, "unavailable");
+  assert.equal(powerView(item, 0, 120).note, "Tanque bajo.");
+  assert.equal(powerView(item, 200, 120).state, "unknown");
+});
+
+test("desconocido sin gateway o de un tipo que no se reporta muestra el motivo", () => {
+  const item = actuator({ state: "unknown", reason: "no_gateway", detail: "No tiene un gateway asignado.", age_seconds: null });
+  assert.deepEqual(
+    { state: powerView(item).state, note: powerView(item).note },
+    { state: "unknown", note: "No tiene un gateway asignado." });
+});
+
+test("un estado que la página no conoce se muestra como desconocido", () => {
+  assert.equal(powerView(actuator({ state: "rompiendose" }), 0, 120).state, "unknown");
 });

@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -21,6 +21,11 @@ info:
     Agrega `GET /greenhouses` (viveros que el usuario puede consultar), el campo
     `area` en las ultimas lecturas y el header opcional `X-SG-Background` para
     que el refresco automatico del dashboard no renueve la sesion.
+
+    **v1.4.0 (Sprint 2, cierre):** estado de los actuadores (ACT-04). La
+    lectura acepta `bomba_activa` y `vent_activo` del firmware y
+    `GET /greenhouses/{greenhouse_id}/actuators/status` devuelve cada equipo
+    como `on`, `off`, `unavailable` o `unknown` (nunca `off` sin confirmacion).
 
     ## Convenciones que no se negocian
 
@@ -102,6 +107,8 @@ tags:
     description: Sesiones de usuario (AUTH-01)
   - name: actuators
     description: Registro de actuadores (CONF-05)
+  - name: control
+    description: Estado de los equipos del vivero (ACT-04)
 
 security:
   - ApiKeyAuth: []
@@ -225,8 +232,9 @@ paths:
           value is less than or equal to 100`
         - `la lectura no es un objeto JSON`
 
-        Los campos que el contrato no define (hoy `bomba_activa` y `vent_activo`
-        del firmware) se ignoran sin rechazar la lectura.
+        Los campos que el contrato no define se ignoran sin rechazar la
+        lectura. Desde v1.4.0, `bomba_activa` y `vent_activo` SI se usan:
+        actualizan el estado de los actuadores activos de ese gateway (ACT-04).
       operationId: ingestReadings
       requestBody:
         required: true
@@ -600,6 +608,45 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /greenhouses/{greenhouse_id}/actuators/status:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [control]
+      summary: Estado actual de cada actuador (ACT-04)
+      description: |
+        Actuadores ACTIVOS del vivero con su estado. El backend lo calcula con
+        el ultimo `bomba_activa` / `vent_activo` que mando el Arduino:
+
+        | `state` | Cuando |
+        |---|---|
+        | `on` / `off` | El Arduino lo confirmo hace menos de `SMARTGREENAI_READING_STALE_MINUTES` |
+        | `unavailable` | Bomba bloqueada por el firmware (`bomba_habilitada: false`, tanque critico) o gateway desactivado |
+        | `unknown` | Nunca lo reporto, la confirmacion es vieja, no tiene gateway o es un tipo que el firmware no reporta (`shade`, `light`) |
+
+        Un equipo sin confirmacion **nunca** se reporta como `off`. El
+        dashboard lo pide cada 15 s con `X-SG-Background: 1`. Todos los
+        roles; un `producer` solo su vivero (403 si pide otro).
+      operationId: getActuatorStatus
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Estado de los equipos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorLiveList'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
 components:
 
   securitySchemes:
@@ -837,6 +884,17 @@ components:
           description: |
             Ventilacion recomendada. `BASE` es la ventilacion constante que el
             cultivo requiere siempre; `ALTA` por calor o exceso de humedad.
+        bomba_activa:
+          type: boolean
+          description: |
+            (v1.4.0) La bomba quedo encendida en esta lectura. Es lo que el
+            firmware ordeno en el pin, no una medicion de que el motor gire.
+            Alimenta el estado del actuador tipo `pump` de este gateway.
+        vent_activo:
+          type: boolean
+          description: |
+            (v1.4.0) El ventilador quedo encendido. Alimenta el estado del
+            actuador tipo `fan` de este gateway.
 
         estado:
           type: string
@@ -1225,6 +1283,82 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LatestMetric'
+
+    # ── Sprint 2: estado de los equipos (ACT-04) ──────────────────────
+
+    PowerState:
+      type: string
+      enum: [on, off, unavailable, unknown]
+      description: |
+        `unknown` = sin confirmacion del Arduino (o confirmacion vieja). Nunca
+        se usa `off` sin confirmacion.
+
+    PowerReason:
+      type: string
+      enum: [reported, tank_low, gateway_inactive, no_gateway, not_reported, never_reported, stale]
+      description: |
+        Por que el estado es el que es: `reported` (confirmado hace poco),
+        `tank_low` (bomba bloqueada por tanque bajo), `gateway_inactive`,
+        `no_gateway`, `not_reported` (el firmware no reporta ese tipo),
+        `never_reported` o `stale` (confirmacion vieja).
+
+    ActuatorLive:
+      type: object
+      required: [actuator_id, name, type, area, control_channel, state, reason, detail]
+      properties:
+        actuator_id:
+          type: string
+          example: bomba-riego-01
+        name:
+          type: string
+          example: Bomba de riego
+        type:
+          $ref: '#/components/schemas/ActuatorType'
+        area:
+          type: string
+          example: general
+        control_channel:
+          type: string
+          example: L298N-B/D5
+        gateway_device_id:
+          type: string
+          nullable: true
+          example: pi-vivero-01
+        state:
+          $ref: '#/components/schemas/PowerState'
+        reason:
+          $ref: '#/components/schemas/PowerReason'
+        detail:
+          type: string
+          description: Explicacion corta en espanol para la UI
+          example: Confirmado por el Arduino.
+        reported_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Hora (UTC) de la lectura que reporto el estado
+        age_seconds:
+          type: integer
+          nullable: true
+          description: Segundos desde esa lectura
+
+    ActuatorLiveList:
+      type: object
+      required: [greenhouse_id, generated_at, stale_after_minutes, actuators]
+      properties:
+        greenhouse_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        stale_after_minutes:
+          type: integer
+          description: Una confirmacion mas vieja que esto se muestra como `unknown`
+          example: 15
+        actuators:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActuatorLive'
 
     ErrorDetail:
       type: object

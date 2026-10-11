@@ -32,7 +32,7 @@ export const LANDING = {
 /** Espejo informativo de las reglas del servidor, para mostrarlas en la UI. */
 export const PERMISSIONS = [
   { label: "Ver el estado de su vivero", roles: ALL },
-  { label: "Ver los equipos activos de su vivero", roles: ALL },
+  { label: "Ver los equipos de su vivero y si están encendidos", roles: ALL },
   { label: "Consultar cualquier vivero", roles: ADMINS },
   { label: "Ver equipos desactivados", roles: ADMINS },
   { label: "Registrar, editar y desactivar equipos", roles: ADMINS },

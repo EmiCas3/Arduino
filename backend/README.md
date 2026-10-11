@@ -94,9 +94,10 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | PATCH | `/actuators/{actuator_id}` | Bearer | admin, super_admin |
 | GET | `/greenhouses` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/readings/latest` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/actuators/status` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.3.0).
+El contrato completo está en `../openapi.yaml` (v1.4.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -109,8 +110,25 @@ El contrato completo está en `../openapi.yaml` (v1.3.0).
 - **Horas imposibles se rechazan:** antes de `SMARTGREENAI_MIN_READING_TS` o
   más de `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` en el futuro.
 - **El backend nunca pone la hora de la lectura**; solo agrega `received_at`.
-- Los campos que el contrato no define (`bomba_activa`, `vent_activo`) se
-  ignoran hasta ACT-04.
+- Los campos que el contrato no define se ignoran sin rechazar la lectura.
+- **Estado de los actuadores (ACT-04):** con cada lectura NUEVA, en orden de
+  hora, `bomba_activa` y `vent_activo` actualizan `actuator_states` de los
+  actuadores activos de ese gateway. Si eso fallara, las lecturas ya quedaron
+  guardadas y el lote se responde igual con 202 (el error va al log).
+
+### Estado de los actuadores (ACT-04)
+
+`GET /greenhouses/{id}/actuators/status` devuelve cada actuador activo con
+`state` y su motivo (`reason`):
+
+| `state` | Cuándo |
+|---|---|
+| `on` / `off` | El Arduino lo confirmó hace menos de `SMARTGREENAI_READING_STALE_MINUTES` |
+| `unavailable` | Bomba bloqueada por el firmware (tanque crítico) o gateway desactivado |
+| `unknown` | Nunca lo reportó, la confirmación es vieja, no tiene gateway, o es malla/iluminación (el firmware no las reporta) |
+
+Un equipo sin confirmación **nunca** sale como `off`. "Encendido" es lo que el
+firmware ordenó en el pin: no mide si el motor gira.
 
 ### Ejemplos
 
@@ -178,9 +196,10 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-157 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (18), actuadores (44), últimas lecturas (13), soporte del
-dashboard (15) y frontend (12).
+179 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (30, incluye el barrido de todas las rutas), actuadores
+(36), últimas lecturas (11), soporte del dashboard (15), estado de los
+actuadores (18) y frontend (14).
 
 ## Estructura
 
@@ -195,11 +214,13 @@ backend/
 │   ├── security.py      # Hash de contraseñas (scrypt) y JWT
 │   ├── dependencies.py  # get_current_user, require_roles (USUARIOS)
 │   ├── seed.py          # Datos de demo
+│   ├── actuator_state.py # Estado reportado de cada actuador (ACT-04)
 │   └── routers/
 │       ├── ingest.py    # POST readings (MON-04)
 │       ├── auth.py      # login / logout / me (AUTH-01)
 │       ├── actuators.py # CRUD sin DELETE de actuadores (CONF-05)
-│       └── readings.py  # viveros visibles y últimas lecturas (DASH-01)
+│       ├── readings.py  # viveros visibles y últimas lecturas (DASH-01)
+│       └── control.py   # estado de los equipos (ACT-04)
 ├── tests/
 ├── requirements.txt
 └── README.md
@@ -214,6 +235,7 @@ backend/
 | `users` | AUTH-01 | `role` ∈ producer / admin / super_admin; `greenhouse_id` = vivero asignado |
 | `sessions` | AUTH-01 | Timeout por inactividad, logout y revocación |
 | `actuators` | CONF-05 | Desactivar = `status='inactive'`; no hay DELETE |
+| `actuator_states` | ACT-04 | Último `bomba_activa` / `vent_activo` de cada actuador, con la hora de la lectura |
 
 No hay migraciones: las tablas se crean con `CREATE TABLE IF NOT EXISTS`. Si
 algún día cambia una tabla **existente**, habrá que borrar la BD local o

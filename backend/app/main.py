@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import close_db, init_db
-from app.routers import actuators
+from app.routers import actuators, control
 from app.routers import auth as auth_routes
 from app.routers import ingest, readings
 
@@ -30,11 +30,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="SmartGreenAI - Radish Crop API",
-    version="1.3.0",
+    version="1.4.0",
     description=(
         "Backend del vivero de rábanos: ingesta de lecturas (X-API-Key del "
         "gateway), sesiones de usuario con JWT, control de acceso por rol, "
-        "registro de actuadores y últimas lecturas."
+        "registro de actuadores, últimas lecturas y estado de los equipos."
     ),
     lifespan=lifespan,
 )
@@ -53,6 +53,7 @@ app.include_router(ingest.router, prefix="/api/v1")
 app.include_router(auth_routes.router, prefix="/api/v1")
 app.include_router(actuators.router, prefix="/api/v1")
 app.include_router(readings.router, prefix="/api/v1")
+app.include_router(control.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

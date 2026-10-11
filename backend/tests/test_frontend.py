@@ -46,9 +46,10 @@ async def test_login_page_has_no_secrets(api):
 # ── Widgets de DASH-01 ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["/js/dashboard.js", "/js/metrics.js"])
+@pytest.mark.parametrize(
+    "path", ["/js/dashboard.js", "/js/metrics.js", "/js/equipment.js", "/js/poller.js"])
 async def test_dashboard_modules_have_javascript_mime(api, path):
-    """Los módulos de los widgets también salen como JavaScript."""
+    """Los módulos de los widgets (DASH-01, ACT-04) también salen como JavaScript."""
     resp = await api.get(path)
     assert resp.status_code == 200
     assert "javascript" in resp.headers["content-type"]

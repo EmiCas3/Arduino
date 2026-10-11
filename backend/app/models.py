@@ -62,8 +62,8 @@ ISO_TS_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 class Reading(BaseModel):
     """Una lectura del Arduino, enriquecida por la Pi con el timestamp.
 
-    Los campos extra que manda el firmware y el contrato aún no define
-    (`bomba_activa`, `vent_activo`) se ignoran hasta ACT-04.
+    `bomba_activa` y `vent_activo` dicen qué hizo el Arduino con cada equipo
+    en esa lectura (ACT-04). Cualquier otro campo extra se ignora.
     """
 
     ts: datetime = Field(
@@ -103,6 +103,11 @@ class Reading(BaseModel):
     riego_sugerido: Optional[bool] = None
     bomba_habilitada: Optional[bool] = None
     vent: Optional[VentEnum] = None
+
+    # Estado de los actuadores según el Arduino (ACT-04). Es lo que el
+    # firmware ORDENÓ en el pin, no una medición de que el motor gire.
+    bomba_activa: Optional[bool] = Field(None, description="La bomba quedó encendida")
+    vent_activo: Optional[bool] = Field(None, description="El ventilador quedó encendido")
 
     # Estado y alertas
     estado: Optional[EstadoEnum] = None
@@ -383,3 +388,57 @@ class GreenhouseSummary(BaseModel):
     last_seen_at: Optional[datetime] = Field(
         None, description="Última vez que uno de sus dispositivos envió lecturas"
     )
+
+
+# ── Estado de los actuadores (ACT-04) ──────────────────────────────────
+
+class PowerState(str, Enum):
+    """Lo que el dashboard muestra de cada equipo.
+
+    `unknown` = nadie confirmó el estado (o la confirmación es vieja). Un
+    equipo sin confirmación NUNCA se reporta como `off`.
+    """
+
+    on = "on"
+    off = "off"
+    unavailable = "unavailable"
+    unknown = "unknown"
+
+
+class PowerReason(str, Enum):
+    """Por qué el estado es el que es (para la UI y para depurar)."""
+
+    reported = "reported"                  # el Arduino lo confirmó hace poco
+    tank_low = "tank_low"                  # la bomba está bloqueada por falta de agua
+    gateway_inactive = "gateway_inactive"  # su gateway está desactivado
+    no_gateway = "no_gateway"              # no tiene gateway: nadie reporta su estado
+    not_reported = "not_reported"          # el firmware no reporta este tipo de equipo
+    never_reported = "never_reported"      # aún no llega ninguna lectura con su estado
+    stale = "stale"                        # la última confirmación es vieja
+
+
+class ActuatorLive(BaseModel):
+    """Un actuador activo del vivero con su estado actual."""
+
+    actuator_id: str = Field(..., example="bomba-riego-01")
+    name: str = Field(..., example="Bomba de riego")
+    type: ActuatorType
+    area: str = Field(..., example="general")
+    control_channel: str = Field(..., example="L298N-B/D5")
+    gateway_device_id: Optional[str] = None
+    state: PowerState
+    reason: PowerReason
+    detail: str = Field(..., description="Explicación corta en español para la UI")
+    reported_at: Optional[datetime] = Field(
+        None, description="Hora de la lectura que reportó el estado (UTC)"
+    )
+    age_seconds: Optional[int] = Field(None, description="Segundos desde esa lectura")
+
+
+class ActuatorLiveList(BaseModel):
+    greenhouse_id: str
+    generated_at: datetime
+    stale_after_minutes: int = Field(
+        ..., description="Una confirmación más vieja que esto se muestra como unknown"
+    )
+    actuators: List[ActuatorLive]

@@ -173,3 +173,47 @@ export function summarize(last) {
   for (const code of unknownAlerts(last.alertas)) chips.push({ tone: "plain", text: code });
   return chips;
 }
+
+// ── Estado de los equipos (ACT-04) ────────────────────────────────────
+
+export const POWER_LABELS = {
+  on: "Encendido",
+  off: "Apagado",
+  unavailable: "No disponible",
+  unknown: "Desconocido",
+};
+
+/**
+ * Cómo se muestra un actuador de /actuators/status.
+ *
+ * La confirmación del Arduino envejece también en el navegador: si entre dos
+ * refrescos pasa el límite (`staleAfter`), el equipo cambia a "Desconocido".
+ * Un equipo sin confirmación NUNCA se muestra como apagado (criterio 3).
+ *
+ * @param item        elemento de `actuators`
+ * @param elapsed     segundos desde que llegó la respuesta
+ * @param staleAfter  segundos tras los que una confirmación ya no vale
+ * @returns {{ state, label, note, age }}
+ */
+export function powerView(item, elapsed = 0, staleAfter = Infinity) {
+  const age = item.age_seconds === null || item.age_seconds === undefined
+    ? null
+    : item.age_seconds + elapsed;
+  let state = POWER_LABELS[item.state] ? item.state : "unknown";
+  let note = item.detail || "";
+
+  // on/off/no disponible por tanque necesitan una confirmación con hora.
+  const needsReport = state === "on" || state === "off" || item.reason === "tank_low";
+  if (needsReport && age === null) {
+    state = "unknown";
+    note = "El Arduino aún no ha confirmado su estado.";
+  } else if (needsReport && age > staleAfter) {
+    state = "unknown";
+    note = `Última confirmación ${formatAge(age)}.`;
+  } else if (state === "unknown" && item.reason === "stale" && age !== null) {
+    note = `Última confirmación ${formatAge(age)}.`;
+  } else if (item.reason === "reported") {
+    note = `Confirmado ${formatAge(age)}`;
+  }
+  return { state, label: POWER_LABELS[state], note, age };
+}

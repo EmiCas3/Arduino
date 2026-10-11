@@ -2,7 +2,7 @@
 
 Interfaz web del vivero de rábano. Hoy cubre **AUTH-01** (login), la parte
 de UI de **AUTH-02** (menú por rol), los widgets de lecturas en vivo de
-**DASH-01** y muestra los actuadores de **CONF-05**.
+**DASH-01**, los actuadores de **CONF-05** y su estado en vivo (**ACT-04**).
 
 Es **HTML + CSS + JavaScript sin framework ni paso de build** (decisión D1 = A
 del plan del Sprint 2). FastAPI sirve esta carpeta desde el mismo origen que
@@ -34,7 +34,9 @@ frontend/
 │   ├── login.js      → lógica del login
 │   ├── panel.js      → vistas: Mi vivero, Configuración, Plataforma
 │   ├── dashboard.js  → DASH-01: tarjetas en vivo, refresco cada 15 s
-│   ├── metrics.js    → DASH-01: estados y textos (lógica pura, sin DOM)
+│   ├── metrics.js    → estados y textos de los widgets (lógica pura, sin DOM)
+│   ├── equipment.js  → ACT-04: "Equipos del vivero" con su estado en vivo
+│   ├── poller.js     → refresco cada 15 s compartido por los widgets nuevos
 │   ├── theme.js      → tema claro/oscuro
 │   └── ui.js         → h() para crear nodos de forma segura, íconos, fechas
 ├── tests/
@@ -102,6 +104,24 @@ Se muestra uno solo, en ese orden de prioridad. Un `null` nunca se pinta como 0.
 - **Administradores:** no tienen vivero asignado; eligen uno de
   `GET /greenhouses` (con un solo vivero se elige solo).
 
+## Estado de los equipos (ACT-04)
+
+"Equipos del vivero" muestra cada actuador activo con su estado, de
+`GET /greenhouses/{id}/actuators/status`, refrescado cada 15 s
+(`equipment.js` + `poller.js`, mismas reglas de sesión y visibilidad que los
+widgets de DASH-01):
+
+| Badge | Cuándo |
+|---|---|
+| Encendido / Apagado | El Arduino lo confirmó hace poco ("Confirmado hace 8 s") |
+| No disponible | Bomba bloqueada por tanque bajo, o gateway desactivado |
+| Desconocido (borde punteado, sin relleno) | Sin confirmación, confirmación vieja, sin gateway, o malla/iluminación |
+
+- **Nunca "Apagado" sin confirmación.** `powerView()` (`metrics.js`) también
+  lo pasa a "Desconocido" si la confirmación envejece entre dos refrescos.
+- "Encendido" es lo que el Arduino ordenó en el pin; no mide si el motor gira
+  (lo dice el tooltip).
+
 Pruebas de la lógica (opcional, necesita Node 18 o más; no hay `npm install`):
 
 ```bash
@@ -141,7 +161,7 @@ empezado con React + Vite.
 |---|---|---|
 | DASH-01 widgets | ✅ Hecho: `dashboard.js` + `metrics.js` (ver "Widgets de Estado actual"). | ~1 h (el polling y la limpieza del intervalo son manuales) |
 | ALERT-01 UI | Lista de alertas y contador en el menú. Crear `js/store.js` (ver abajo) para compartir las alertas entre el menú y la vista sin recargar. Puede reutilizar el refresco de `dashboard.js`. | ~1 h |
-| ACT-04 | Badge de estado por actuador (on / off / desconocido) reutilizando `equipIcon()` y `.pill`, con el mismo refresco de 15 s. | ~0.5 h |
+| ACT-04 | ✅ Hecho: `equipment.js` + `poller.js` (ver "Estado de los equipos"). | ~0.5 h |
 
 ### Sprint 3 (historia y AI)
 

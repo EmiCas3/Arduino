@@ -2,7 +2,7 @@
  * Panel principal: shell con menú por rol (AUTH-02) y pantallas de inicio.
  *
  * Secciones (roles.js):
- *   #/inicio         todos           lecturas en vivo (DASH-01) y equipos activos
+ *   #/inicio         todos           lecturas en vivo (DASH-01) y estado de los equipos (ACT-04)
  *   #/configuracion  admin, super    actuadores registrados (CONF-05)
  *   #/plataforma     super           permisos por rol y módulos próximos
  *
@@ -11,6 +11,7 @@
  */
 import { apiFetch, ApiError } from "./api.js";
 import { mountLiveReadings } from "./dashboard.js";
+import { mountEquipment } from "./equipment.js";
 import { clearSession, loadSession, setFlash } from "./session.js";
 import {
   ACTUATOR_TYPES,
@@ -221,7 +222,7 @@ function renderInicio() {
         liveBody),
 
       h("section", { class: "card span-7", "aria-labelledby": "t-equipos" },
-        cardHead("Equipos del vivero", "Actuadores registrados y activos. Son los que podrás controlar.", null, "t-equipos"),
+        cardHead("Equipos del vivero", "Lo que el Arduino reporta de cada equipo. Se actualiza solo cada 15 s.", null, "t-equipos"),
         equipmentBody),
 
       h("section", { class: "card span-5", "aria-labelledby": "t-acceso" },
@@ -237,17 +238,23 @@ function renderInicio() {
       ),
     ),
   );
-  startLiveReadings(liveBody, picker);
-  loadEquipment(equipmentBody);
+  startLiveReadings(liveBody, picker, equipmentBody);
 }
 
-/** Arranca los widgets de DASH-01 en el vivero del usuario (o el que elija un admin). */
-async function startLiveReadings(body, picker) {
+/**
+ * Arranca los widgets en vivo (DASH-01, ACT-04) en el vivero del usuario, o
+ * en el que elija un admin. Todos se detienen juntos al salir de la vista.
+ */
+async function startLiveReadings(body, picker, equipmentBody) {
   const token = state.viewToken;
   const show = (greenhouseId) => {
     if (state.cleanup) state.cleanup();
     state.greenhouse = greenhouseId;
-    state.cleanup = mountLiveReadings(body, greenhouseId);
+    const stops = [
+      mountLiveReadings(body, greenhouseId),
+      mountEquipment(equipmentBody, greenhouseId),
+    ];
+    state.cleanup = () => stops.forEach((stop) => stop());
   };
 
   // Productor: su vivero asignado. El servidor lo vuelve a comprobar (403 si no es suyo).
@@ -260,12 +267,16 @@ async function startLiveReadings(body, picker) {
   try {
     greenhouses = await apiFetch("/greenhouses");
   } catch (error) {
-    if (token === state.viewToken) body.replaceChildren(errorNotice(error));
+    if (token === state.viewToken) {
+      body.replaceChildren(errorNotice(error));
+      equipmentBody.replaceChildren();
+    }
     return;
   }
   if (token !== state.viewToken) return;   // ya se navegó a otra sección
 
   if (!greenhouses.length) {
+    equipmentBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay equipos que mostrar."));
     body.replaceChildren(h("div", { class: "empty" },
       h("strong", {}, state.user.role === "producer"
         ? "Tu usuario aún no tiene un vivero asignado."
@@ -289,28 +300,6 @@ async function startLiveReadings(body, picker) {
     picker.replaceChildren(h("span", { class: "pill pill-plain" }, icon("sprout", "icon-sm"), selected));
   }
   show(selected);
-}
-
-async function loadEquipment(container) {
-  try {
-    const actuators = await apiFetch("/actuators");
-    if (!actuators.length) {
-      container.replaceChildren(h("div", { class: "empty" },
-        h("strong", {}, "Aún no hay equipos registrados."),
-        "Un Administrador puede registrar la bomba, el ventilador y demás equipos del vivero."));
-      return;
-    }
-    container.replaceChildren(h("ul", { class: "list" },
-      actuators.map((a) => h("li", { class: "list-item" },
-        equipIcon(a.type),
-        h("div", { class: "list-main" },
-          h("div", { class: "list-title" }, a.name),
-          h("div", { class: "list-sub" },
-            `${ACTUATOR_TYPES[a.type]?.label || a.type} · ${a.greenhouse_id} · área ${a.area}`)),
-        h("span", { class: "channel", title: "Canal de control" }, a.control_channel)))));
-  } catch (error) {
-    container.replaceChildren(errorNotice(error));
-  }
 }
 
 // ── Vista: Configuración (admins) ─────────────────────────────────────

@@ -219,9 +219,12 @@ async def test_rejected_reading_does_not_update_last_seen(api, db):
 
 @pytest.mark.asyncio
 async def test_firmware_extra_fields_are_ignored(api, db):
-    """bomba_activa y vent_activo aún no están en el contrato (ACT-04)."""
-    data = await post(api, reading("2026-09-20T18:00:00Z", bomba_activa=True, vent_activo=False))
+    """bomba_activa y vent_activo se aceptan desde ACT-04; un campo que el
+    contrato no define se sigue ignorando sin rechazar la lectura."""
+    data = await post(api, reading("2026-09-20T18:00:00Z", bomba_activa=True, vent_activo=False,
+                                   campo_nuevo_del_firmware=123))
     assert data["accepted"] == 1
+    assert data["rejected"] == []
 
 
 # ── Configuración ──────────────────────────────────────────────────────

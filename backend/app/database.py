@@ -138,6 +138,18 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
         -- altera las columnas de readings y es idempotente.
         CREATE INDEX IF NOT EXISTS ix_readings_greenhouse_ts
             ON readings(greenhouse_id, ts);
+
+        -- ACT-04: ultimo estado que el Arduino reporto de cada actuador
+        -- (bomba_activa / vent_activo). readings no se altera: va aparte.
+        -- reading_ts es la hora de la lectura que lo reporto (UTC, ms).
+        CREATE TABLE IF NOT EXISTS actuator_states (
+            actuator_id TEXT PRIMARY KEY REFERENCES actuators(actuator_id),
+            is_on       INTEGER NOT NULL,
+            enabled     INTEGER,
+            reading_ts  TEXT NOT NULL,
+            device_id   TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
     """)
     await _db.commit()
     return _db
