@@ -19,9 +19,12 @@ const {
   POWER_LABELS,
   alertTitle,
   alertsFor,
+  commandFeedback,
   describeAlert,
+  eventText,
   formatDuration,
   formatMeasure,
+  modeHelp,
   newActiveAlerts,
   titleWithCount,
   visibleAlerts,
@@ -279,4 +282,41 @@ test("duraciones legibles", () => {
   assert.equal(formatDuration(1080), "18 min");
   assert.equal(formatDuration(7500), "2 h 5 min");
   assert.equal(formatDuration(3 * 86400), "3 d");
+});
+
+// ── Riego (ACT-02) ─────────────────────────────────────────────────────
+
+test("una orden en camino dice que se espera al Arduino", () => {
+  for (const status of ["pending", "sent"]) {
+    assert.deepEqual(commandFeedback({ value: "ON", status }),
+      { tone: "wait", text: "Orden enviada (regar). Esperando al Arduino…" });
+  }
+});
+
+test("una orden rechazada o perdida avisa por qué", () => {
+  assert.equal(commandFeedback({ value: "ON", status: "rejected", error: "TANQUE" }).text,
+    "El Arduino no aplicó la orden (regar): el tanque está bajo.");
+  assert.equal(commandFeedback({ value: "MANUAL", status: "expired" }).tone, "warn");
+  assert.match(commandFeedback({ value: "MANUAL", status: "expired" }).text, /no confirmó la orden \(pasar a manual\)/);
+});
+
+test("una orden aplicada o reemplazada no muestra nada", () => {
+  assert.equal(commandFeedback({ value: "ON", status: "confirmed" }), null);
+  assert.equal(commandFeedback({ value: "ON", status: "superseded" }), null);
+  assert.equal(commandFeedback(null), null);
+});
+
+test("la ayuda del modo usa los números del firmware", () => {
+  const irrigation = { mode: "auto", firmware: { target_pct: 50, max_run_seconds: 60 } };
+  assert.match(modeHelp(irrigation), /baja de 50 %.*máximo 60 s/);
+  assert.match(modeHelp({ ...irrigation, mode: "manual" }), /no riega solo/);
+});
+
+test("las acciones automáticas y manuales se distinguen", () => {
+  const auto = eventText({ actuator_type: "pump", event: "on", origin: "auto", reason: "Tierra al 42 %" });
+  assert.deepEqual(auto, { what: "Bomba encendida", origin: "Automático", manual: false, reason: "Tierra al 42 %" });
+  const manual = eventText({ actuator_type: "pump", event: "off", origin: "manual", user_name: "Emi", reason: "Orden manual" });
+  assert.equal(manual.origin, "Manual · Emi");
+  assert.equal(manual.what, "Bomba apagada");
+  assert.equal(eventText({ actuator_type: "fan", event: "on", origin: "auto" }).what, "Ventilador encendido");
 });

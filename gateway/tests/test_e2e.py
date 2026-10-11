@@ -8,6 +8,9 @@ Cubre los criterios de MON-03:
 Y la regla del reloj: sin NTP no se envía nada; al sincronizar salen con la
 hora correcta.
 
+ACT-02: la cadena completa de una orden (backend → 202 → gateway → Serial →
+Arduino simulado → lectura → backend) y el riego automático registrado.
+
 Necesita las dependencias del backend (se salta si no están instaladas).
 """
 
@@ -22,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -95,17 +99,19 @@ class Backend:
         with closing(sqlite3.connect(self.db_path)) as conn:
             return [r[0] for r in conn.execute("SELECT ts FROM readings ORDER BY ts")]
 
-    def latest(self) -> dict:
-        def call(path, body=None, token=None):
-            req = urllib.request.Request(self.url + path, method="POST" if body else "GET",
-                                         data=json.dumps(body).encode() if body else None)
-            req.add_header("Content-Type", "application/json")
-            if token:
-                req.add_header("Authorization", f"Bearer {token}")
-            return json.loads(NO_PROXY.open(req, timeout=5).read())
+    def call(self, path, body=None, token=None, method=None):
+        req = urllib.request.Request(self.url + path, method=method or ("POST" if body else "GET"),
+                                     data=json.dumps(body).encode() if body else None)
+        req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        return json.loads(NO_PROXY.open(req, timeout=5).read())
 
-        token = call("/auth/login", {"login": "productor", "password": PASSWORD})["access_token"]
-        return call("/greenhouses/vivero-rabano-01/readings/latest", token=token)
+    def login(self) -> str:
+        return self.call("/auth/login", {"login": "productor", "password": PASSWORD})["access_token"]
+
+    def latest(self) -> dict:
+        return self.call("/greenhouses/vivero-rabano-01/readings/latest", token=self.login())
 
 
 @pytest.fixture
@@ -121,17 +127,18 @@ def backend(tmp_path):
 class GatewayThread:
     """`python -m gateway simulate` dentro de un hilo, para poder detenerlo."""
 
-    def __init__(self, cfg: Config, clock: FakeClock) -> None:
+    def __init__(self, cfg: Config, clock: FakeClock, **arduino) -> None:
         self.stop = threading.Event()
         self.cfg = cfg
         self.clock = clock
+        self.arduino = arduino
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self):
         run_gateway(
             self.cfg,
             open_port=lambda port, baud: SimulatedArduino(
-                interval=0.05, sleep=lambda s: self.stop.wait(s)),
+                interval=0.05, sleep=lambda s: self.stop.wait(s), **self.arduino),
             find=lambda setting: "arduino-simulado",
             clock=self.clock,
             stop=self.stop,
@@ -236,3 +243,64 @@ def test_unsynced_clock_sends_nothing_until_ntp(tmp_path, backend):
     # Las lecturas "sin hora" quedaron fechadas ANTES de la sincronización.
     first = datetime.fromisoformat(stored[0]).timestamp()
     assert first < before_sync
+
+
+# ── ACT-02: riego automático y órdenes de punta a punta ────────────────
+
+GH = "/greenhouses/vivero-rabano-01"
+
+
+def pump_state(backend, token) -> str:
+    status = backend.call(f"{GH}/actuators/status", token=token)
+    return next(a for a in status["actuators"] if a["type"] == "pump")["state"]
+
+
+def pump_events(backend, token) -> list:
+    events = backend.call(f"{GH}/actuators/events?limit=50", token=token)["events"]
+    return [(e["event"], e["origin"], e["reason"], e["user_name"])
+            for e in reversed(events) if e["actuator_type"] == "pump"]
+
+
+def test_irrigation_chain_with_simulated_arduino(tmp_path, backend):
+    cfg = gateway_config(tmp_path, backend)
+    with GatewayThread(cfg, LiveClock(), dry=True, seed=7):
+        token = backend.login()
+        # 1. AUTO: la tierra está seca → el Arduino riega solo y para al objetivo.
+        assert wait_for(lambda: ("off", "auto") in [e[:2] for e in pump_events(backend, token)])
+        auto = pump_events(backend, token)
+        assert auto[0][:2] == ("on", "auto") and "abajo del objetivo de 50 %" in auto[0][2]
+        assert auto[1][2].startswith("Objetivo alcanzado")
+
+        # 2. Pasa a MANUAL: la orden viaja en el 202, el gateway la escribe y
+        #    el Arduino la confirma.
+        backend.call(f"{GH}/irrigation/mode", {"mode": "manual"}, token=token, method="PUT")
+        assert wait_for(lambda: backend.call(f"{GH}/irrigation", token=token)["reported_mode"] == "manual")
+        assert backend.call(f"{GH}/irrigation", token=token)["last_mode_command"]["status"] == "confirmed"
+
+        # 3. Orden manual: regar y detener.
+        backend.call("/actuators/bomba-riego-01/commands", {"action": "on"}, token=token)
+        assert wait_for(lambda: pump_state(backend, token) == "on")
+        backend.call("/actuators/bomba-riego-01/commands", {"action": "off"}, token=token)
+        assert wait_for(lambda: pump_state(backend, token) == "off")
+        manual = [e for e in pump_events(backend, token) if e[1] == "manual"]
+        assert ("on", "manual", "Orden manual", "Productor de rábano") in manual
+        assert ("off", "manual", "Orden manual", "Productor de rábano") in manual
+    with closing(sqlite3.connect(cfg.buffer_db)) as conn:
+        last = dict(conn.execute("SELECT clave, valor FROM meta").fetchall()).get("ultima_orden")
+    assert last and last.endswith("BOMBA,OFF")
+
+
+def test_old_firmware_gets_no_orders(tmp_path, backend):
+    cfg = gateway_config(tmp_path, backend)
+    with GatewayThread(cfg, LiveClock(), legacy=True):
+        assert wait_for(lambda: len(backend.stored_ts()) >= 3)
+        token = backend.login()
+        irrigation = backend.call(f"{GH}/irrigation", token=token)
+        assert irrigation["controllable"] is False
+        req = urllib.request.Request(backend.url + f"{GH}/irrigation/mode", method="PUT",
+                                     data=json.dumps({"mode": "manual"}).encode())
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {token}")
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            NO_PROXY.open(req, timeout=5)
+        assert refused.value.code == 409

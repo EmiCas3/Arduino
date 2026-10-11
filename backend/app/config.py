@@ -20,6 +20,8 @@ Variables:
                                        reloj del servidor antes de rechazarse (300)
     SMARTGREENAI_ALERT_CLEAR_SECONDS   Segundos seguidos sin el código de límite para
                                        cerrar una alerta (60)
+    SMARTGREENAI_COMMAND_ACK_SECONDS   Segundos que se espera que el Arduino confirme
+                                       una orden antes de darla por perdida (45)
 """
 
 import logging
@@ -89,6 +91,10 @@ class Settings:
         # ALERT-01: una alerta se cierra cuando su condición lleva este tiempo
         # sin repetirse (evita duplicados si el valor brinca junto al límite).
         self.alert_clear_seconds: int = _int_env("SMARTGREENAI_ALERT_CLEAR_SECONDS", 60)
+
+        # ACT-02: segundos que se espera la confirmación del Arduino (cmd_id)
+        # después de entregar una orden al gateway. Pasado eso, "expired".
+        self.command_ack_seconds: int = _int_env("SMARTGREENAI_COMMAND_ACK_SECONDS", 45)
 
         # El prototipo es un solo ambiente: todos los sensores están en la misma
         # área. Es el mismo valor que usan los actuadores del seed.

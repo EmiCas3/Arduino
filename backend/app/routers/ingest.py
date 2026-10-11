@@ -27,12 +27,13 @@ from pydantic import ValidationError
 
 import aiosqlite
 
-from app import actuator_state, alerts
+from app import actuator_state, alerts, irrigation
 from app.auth import verify_api_key
 from app.config import settings
 from app.database import get_db
 from app.models import (
     ErrorResponse,
+    GatewayCommand,
     IngestResult,
     Reading,
     ReadingBatch,
@@ -103,9 +104,11 @@ async def ingest_readings(
     4. Las válidas: INSERT OR IGNORE → contar accepted/duplicates.
     5. Actualizar last_seen_at del device si se guardó algo.
     6. Con las lecturas NUEVAS (no duplicadas), en orden de hora: estado de
-       los actuadores (ACT-04) y alertas (ALERT-01). Cuando el gateway recibe
-       el 202, la alerta ya existe.
-    7. Retornar 202 con IngestResult.
+       los actuadores (ACT-04), riego (ACT-02: confirmar órdenes, registrar
+       encendidos/apagados, re-sincronizar el modo) y alertas (ALERT-01).
+       Cuando el gateway recibe el 202, la alerta ya existe.
+    7. Retornar 202 con IngestResult y las órdenes pendientes de este
+       gateway en `commands` (ACT-02), que el gateway escribe al Arduino.
     """
     device_id = device["device_id"]
     greenhouse_id = device["greenhouse_id"]
@@ -199,12 +202,13 @@ async def ingest_readings(
 
     if new_readings:
         new_readings.sort(key=lambda item: item[0])
-        await _after_store(db, device_id, greenhouse_id, new_readings, now)
+        await _after_store(db, device_id, greenhouse_id, new_readings, now_dt)
 
     return IngestResult(
         accepted=accepted,
         duplicates=duplicates,
         rejected=rejected,
+        commands=await _pending_commands(db, device_id, now_dt),
     )
 
 
@@ -213,7 +217,7 @@ async def _after_store(
     device_id: str,
     greenhouse_id: str,
     new_readings: List[Tuple[str, Reading]],
-    now: str,
+    now_dt: datetime,
 ) -> None:
     """Lo que se deriva de las lecturas ya guardadas.
 
@@ -221,12 +225,21 @@ async def _after_store(
     guardadas y el lote se responde igual con 202: un error aquí no debe
     hacer que el gateway reintente el lote para siempre. Se registra en el log.
     """
+    now = now_dt.isoformat()
+    transitions: List[actuator_state.Transition] = []
     try:
-        await actuator_state.apply_readings(db, device_id, new_readings, now)
+        transitions = await actuator_state.apply_readings(db, device_id, new_readings, now)
         await db.commit()
     except Exception:
         await db.rollback()
         logger.exception("No se pudo actualizar el estado de los actuadores de %s", device_id)
+
+    try:
+        await irrigation.process(db, device_id, greenhouse_id, new_readings, transitions, now_dt)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("No se pudo procesar el riego de %s", device_id)
 
     try:
         await alerts.evaluate(db, device_id, greenhouse_id, new_readings, now)
@@ -234,3 +247,17 @@ async def _after_store(
     except Exception:
         await db.rollback()
         logger.exception("No se pudieron evaluar las alertas de %s", device_id)
+
+
+async def _pending_commands(
+    db: aiosqlite.Connection, device_id: str, now_dt: datetime
+) -> List[GatewayCommand]:
+    """Órdenes que este gateway debe escribir al Arduino (ACT-02)."""
+    try:
+        commands = await irrigation.deliver(db, device_id, now_dt)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("No se pudieron entregar las órdenes de %s", device_id)
+        return []
+    return [GatewayCommand(**command) for command in commands]

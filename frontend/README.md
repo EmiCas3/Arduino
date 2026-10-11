@@ -2,8 +2,8 @@
 
 Interfaz web del vivero de rábano. Hoy cubre **AUTH-01** (login), la parte
 de UI de **AUTH-02** (menú por rol), los widgets de lecturas en vivo de
-**DASH-01**, las alertas de **ALERT-01**, los actuadores de **CONF-05** y su
-estado en vivo (**ACT-04**).
+**DASH-01**, las alertas de **ALERT-01**, los actuadores de **CONF-05**, su
+estado en vivo (**ACT-04**) y el control del riego (**ACT-02**).
 
 Es **HTML + CSS + JavaScript sin framework ni paso de build** (decisión D1 = A
 del plan del Sprint 2). FastAPI sirve esta carpeta desde el mismo origen que
@@ -37,7 +37,7 @@ frontend/
 │   ├── dashboard.js  → DASH-01: tarjetas en vivo, refresco cada 15 s
 │   ├── metrics.js    → estados y textos de los widgets (lógica pura, sin DOM)
 │   ├── alerts.js     → ALERT-01: tarjeta "Alertas", avisos flotantes y contador
-│   ├── equipment.js  → ACT-04: "Equipos del vivero" con su estado en vivo
+│   ├── equipment.js  → ACT-04 y ACT-02: estado de los equipos y control del riego
 │   ├── poller.js     → refresco cada 15 s compartido por los widgets nuevos
 │   ├── theme.js      → tema claro/oscuro
 │   └── ui.js         → h() para crear nodos de forma segura, íconos, fechas
@@ -143,6 +143,25 @@ widgets de DASH-01):
 - "Encendido" es lo que el Arduino ordenó en el pin; no mide si el motor gira
   (lo dice el tooltip).
 
+## Control del riego (ACT-02)
+
+Debajo de la bomba, en "Equipos del vivero":
+
+- **Riego: Automático / Manual.** En automático el Arduino riega solo con sus
+  constantes; la ayuda dice el objetivo y el tiempo máximo que manda
+  `GET /irrigation` (no hay números en JavaScript). El productor y los
+  admins lo pueden cambiar.
+- **Regar / Detener**, solo en manual. "Regar" se desactiva si la bomba está
+  "No disponible" (tanque bajo).
+- **Después de un clic** se ve "Orden enviada… Esperando al Arduino" y el
+  refresco se acelera (cada 3 s durante 40 s, `poller.boost()`) hasta que el
+  Arduino confirma; el badge cambia sin recargar. Si el Arduino la rechaza o
+  no confirma, se dice por qué (`commandFeedback()` en `metrics.js`).
+- **Firmware sin el protocolo:** el switch queda deshabilitado con la
+  explicación; el estado de los equipos se sigue mostrando.
+- **Últimas acciones:** los 6 encendidos/apagados más recientes con su
+  origen: "Automático" o "Manual · nombre" (`eventText()`).
+
 Pruebas de la lógica (opcional, necesita Node 18 o más; no hay `npm install`):
 
 ```bash
@@ -183,6 +202,7 @@ empezado con React + Vite.
 | DASH-01 widgets | ✅ Hecho: `dashboard.js` + `metrics.js` (ver "Widgets de Estado actual"). | ~1 h (el polling y la limpieza del intervalo son manuales) |
 | ALERT-01 UI | ✅ Hecho: `alerts.js` (ver "Alertas"). El contador va en la tarjeta y en el título de la pestaña; ponerlo también en el menú lateral necesitará `js/store.js` (ver abajo). | ~1 h |
 | ACT-04 | ✅ Hecho: `equipment.js` + `poller.js` (ver "Estado de los equipos"). | ~0.5 h |
+| ACT-02 | ✅ Hecho: control del riego en `equipment.js` (ver "Control del riego"). | ~1 h (estado optimista y refresco acelerado a mano) |
 
 ### Sprint 3 (historia y AI)
 

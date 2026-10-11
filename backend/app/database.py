@@ -184,6 +184,66 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
             ON alerts(greenhouse_id, area, metric) WHERE status = 'active';
         CREATE INDEX IF NOT EXISTS ix_alerts_greenhouse
             ON alerts(greenhouse_id, status, reading_ts);
+
+        -- ACT-02: lo que el firmware dice de si mismo en su ultima lectura.
+        -- mode NULL = firmware que no acepta ordenes (no manda "modo").
+        CREATE TABLE IF NOT EXISTS controller_status (
+            device_id      TEXT PRIMARY KEY REFERENCES devices(device_id),
+            mode           TEXT CHECK(mode IN ('AUTO','MANUAL')),
+            last_cmd_id    INTEGER,
+            last_cmd_error TEXT,
+            reading_ts     TEXT NOT NULL,
+            updated_at     TEXT NOT NULL
+        );
+
+        -- ACT-02: modo de riego que eligio una persona (sin fila = auto).
+        CREATE TABLE IF NOT EXISTS irrigation_mode (
+            greenhouse_id TEXT PRIMARY KEY,
+            mode          TEXT NOT NULL CHECK(mode IN ('auto','manual')),
+            changed_at    TEXT NOT NULL,
+            changed_by    INTEGER REFERENCES users(id)
+        );
+
+        -- ACT-02: ordenes para el Arduino. El id es el <n> de "SG,<n>,...".
+        -- Viajan en la respuesta de la ingesta y el gateway las escribe.
+        CREATE TABLE IF NOT EXISTS actuator_commands (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            greenhouse_id TEXT NOT NULL,
+            device_id     TEXT NOT NULL REFERENCES devices(device_id),
+            actuator_id   TEXT REFERENCES actuators(actuator_id),
+            kind          TEXT NOT NULL CHECK(kind IN ('mode','pump')),
+            value         TEXT NOT NULL CHECK(value IN ('AUTO','MANUAL','ON','OFF')),
+            trigger       TEXT NOT NULL CHECK(trigger IN ('manual','system')),
+            reason        TEXT NOT NULL,
+            user_id       INTEGER REFERENCES users(id),
+            status        TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(status IN ('pending','sent','confirmed','rejected',
+                                           'expired','superseded')),
+            error         TEXT,
+            created_at    TEXT NOT NULL,
+            sent_at       TEXT,
+            confirmed_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_commands_device
+            ON actuator_commands(device_id, status);
+
+        -- ACT-02: cada encendido/apagado que reporto el Arduino, con su
+        -- origen (auto = lo decidio el firmware, manual = una persona).
+        CREATE TABLE IF NOT EXISTS actuator_events (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            actuator_id   TEXT NOT NULL REFERENCES actuators(actuator_id),
+            greenhouse_id TEXT NOT NULL,
+            device_id     TEXT NOT NULL,
+            event         TEXT NOT NULL CHECK(event IN ('on','off')),
+            origin        TEXT NOT NULL CHECK(origin IN ('auto','manual')),
+            reason        TEXT NOT NULL,
+            user_id       INTEGER REFERENCES users(id),
+            command_id    INTEGER REFERENCES actuator_commands(id),
+            reading_ts    TEXT NOT NULL,
+            created_at    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_events_greenhouse
+            ON actuator_events(greenhouse_id, reading_ts);
     """)
     await _db.commit()
     return _db

@@ -230,7 +230,7 @@ function renderInicio() {
         alertsBody),
 
       h("section", { class: "card span-7", "aria-labelledby": "t-equipos" },
-        cardHead("Equipos del vivero", "Lo que el Arduino reporta de cada equipo. Se actualiza solo cada 15 s.", null, "t-equipos"),
+        cardHead("Equipos del vivero", "Lo que el Arduino reporta de cada equipo y el control del riego. Se actualiza solo cada 15 s.", null, "t-equipos"),
         equipmentBody),
 
       h("section", { class: "card span-5", "aria-labelledby": "t-acceso" },

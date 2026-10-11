@@ -30,6 +30,13 @@ class EstadoEnum(str, Enum):
     ALERTA = "ALERTA"
 
 
+class ModoEnum(str, Enum):
+    """Modo de riego que reporta el firmware (ACT-02)."""
+
+    AUTO = "AUTO"
+    MANUAL = "MANUAL"
+
+
 class AlertaEnum(str, Enum):
     TEMP_ALTA = "TEMP_ALTA"
     TEMP_BAJA = "TEMP_BAJA"
@@ -109,6 +116,18 @@ class Reading(BaseModel):
     bomba_activa: Optional[bool] = Field(None, description="La bomba quedó encendida")
     vent_activo: Optional[bool] = Field(None, description="El ventilador quedó encendido")
 
+    # Riego (ACT-02). Solo los manda un firmware que acepta órdenes de la Pi;
+    # si `modo` no viene, el Arduino no acepta órdenes.
+    modo: Optional[ModoEnum] = Field(None, description="AUTO: riega solo. MANUAL: solo órdenes")
+    cmd_id: Optional[int] = Field(None, ge=0, description="Última orden aplicada (0 = ninguna)")
+    cmd_err: Optional[str] = Field(
+        None, regex=r"^[A-Z_]{1,20}$", description="Por qué no aplicó esa orden: MODO, TANQUE, FORMATO"
+    )
+    bomba_paro: Optional[str] = Field(
+        None, regex=r"^[A-Z_]{1,20}$",
+        description="Por qué se apagó la bomba la última vez: OBJETIVO, TIEMPO, TANQUE, SENSOR, MODO, ORDEN",
+    )
+
     # Estado y alertas
     estado: Optional[EstadoEnum] = None
     alertas: Optional[List[AlertaEnum]] = None
@@ -158,10 +177,27 @@ class RejectedReading(BaseModel):
     reason: str
 
 
+class GatewayCommand(BaseModel):
+    """Orden para el Arduino que el gateway escribe por Serial (ACT-02).
+
+    El gateway la convierte en una línea `SG,<id>,MODO,AUTO`,
+    `SG,<id>,BOMBA,ON`, etc. (gateway/PROTOCOLO_ARDUINO.md).
+    """
+
+    id: int = Field(..., example=17)
+    kind: str = Field(..., example="pump", description="mode | pump")
+    value: str = Field(..., example="ON", description="AUTO | MANUAL (mode) · ON | OFF (pump)")
+    actuator_id: Optional[str] = Field(None, example="bomba-riego-01")
+
+
 class IngestResult(BaseModel):
     accepted: int = 0
     duplicates: int = 0
     rejected: List[RejectedReading] = Field(default_factory=list)
+    commands: List[GatewayCommand] = Field(
+        default_factory=list,
+        description="Órdenes pendientes para el Arduino de este gateway (ACT-02)",
+    )
 
 
 # ── StoredReading (para consultas) ─────────────────────────────────────
@@ -433,6 +469,9 @@ class ActuatorLive(BaseModel):
         None, description="Hora de la lectura que reportó el estado (UTC)"
     )
     age_seconds: Optional[int] = Field(None, description="Segundos desde esa lectura")
+    last_command: Optional["CommandOut"] = Field(
+        None, description="Última orden manual a este equipo en los últimos 10 min (ACT-02)"
+    )
 
 
 class ActuatorLiveList(BaseModel):
@@ -492,3 +531,98 @@ class AlertList(BaseModel):
         ..., description="Segundos seguidos sin el código para cerrar una alerta"
     )
     alerts: List[AlertOut]
+
+
+# ── Riego: modo, órdenes y acciones (ACT-02) ───────────────────────────
+
+class IrrigationMode(str, Enum):
+    auto = "auto"      # el Arduino riega solo con sus umbrales
+    manual = "manual"  # no riega solo: solo actúan las órdenes manuales
+
+
+class CommandAction(str, Enum):
+    on = "on"
+    off = "off"
+
+
+class CommandStatus(str, Enum):
+    pending = "pending"        # esperando a que el gateway la recoja
+    sent = "sent"              # entregada al gateway; falta que el Arduino confirme
+    confirmed = "confirmed"    # el Arduino la aplicó (cmd_id)
+    rejected = "rejected"      # el Arduino no la aplicó (cmd_err)
+    expired = "expired"        # nadie la confirmó a tiempo
+    superseded = "superseded"  # otra orden más nueva la reemplazó antes de salir
+
+
+class CommandOut(BaseModel):
+    id: int
+    actuator_id: Optional[str] = None
+    kind: str = Field(..., description="mode | pump")
+    value: str = Field(..., description="AUTO | MANUAL | ON | OFF")
+    trigger: str = Field(..., description="manual (una persona) | system (re-sincronizar el modo)")
+    reason: str
+    status: CommandStatus
+    error: Optional[str] = Field(None, description="cmd_err del Arduino si la rechazó")
+    user_name: Optional[str] = None
+    created_at: datetime
+    sent_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+
+
+class FirmwareIrrigation(BaseModel):
+    """Parámetros de riego que usa el Arduino (viven en el firmware)."""
+
+    target_pct: float = Field(..., example=50, description="SUELO_LIMITE_MIN")
+    max_run_seconds: int = Field(..., example=60, description="BOMBA_MAX_MS")
+    rest_seconds: int = Field(..., example=300, description="BOMBA_DESCANSO_MS")
+
+
+class IrrigationStatus(BaseModel):
+    greenhouse_id: str
+    mode: IrrigationMode = Field(..., description="Modo elegido en la plataforma (auto por defecto)")
+    reported_mode: Optional[IrrigationMode] = Field(
+        None, description="Modo que reporta el Arduino; null si su firmware no acepta órdenes"
+    )
+    controllable: bool = Field(..., description="Se le pueden mandar órdenes al Arduino")
+    detail: str = Field(..., description="Explicación corta para la UI")
+    controller_device_id: Optional[str] = None
+    reported_at: Optional[datetime] = None
+    mode_changed_at: Optional[datetime] = None
+    mode_changed_by: Optional[str] = None
+    last_mode_command: Optional[CommandOut] = Field(
+        None, description="Última orden de cambio de modo en los últimos 10 min"
+    )
+    firmware: FirmwareIrrigation
+
+
+class ModeChange(BaseModel):
+    mode: IrrigationMode
+
+
+class CommandCreate(BaseModel):
+    action: CommandAction
+
+    class Config:
+        extra = "forbid"
+
+
+class ActuatorEventOut(BaseModel):
+    """Un encendido o apagado que reportó el Arduino (ACT-02 #4)."""
+
+    id: int
+    actuator_id: str
+    actuator_name: str
+    actuator_type: ActuatorType
+    event: CommandAction
+    origin: str = Field(..., description="auto (lo decidió el Arduino) | manual (una persona)")
+    reason: str
+    user_name: Optional[str] = None
+    reading_ts: datetime
+
+
+class ActuatorEventList(BaseModel):
+    greenhouse_id: str
+    events: List[ActuatorEventOut]
+
+
+ActuatorLive.update_forward_refs(CommandOut=CommandOut)

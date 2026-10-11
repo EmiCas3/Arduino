@@ -1,10 +1,12 @@
 """
 Espejo de SOLO LECTURA de las constantes del firmware (vivero_sensoresV2.ino).
 
-Los umbrales del rábano viven en el código del Arduino: él compara cada
-lectura y manda códigos como `TEMP_ALTA` o `SUELO_SECO`. El backend no
-vuelve a comparar nada; este módulo solo sirve para ANOTAR en cada alerta
-(ALERT-01) qué umbral cruzó y con qué número.
+Los umbrales del rábano y los parámetros de riego viven en el código del
+Arduino: él compara cada lectura, manda códigos como `TEMP_ALTA` o
+`SUELO_SECO` y decide el riego automático. El backend no vuelve a comparar
+ni a decidir nada; este módulo solo sirve para ANOTAR en cada alerta
+(ALERT-01) qué umbral cruzó, y para EXPLICAR en la UI y en el registro de
+riegos (ACT-02) con qué objetivo y tiempo máximo trabaja el Arduino.
 
 Si alguien cambia un umbral en el `.ino`, `tests/test_firmware_mirror.py`
 falla y dice qué línea de aquí corregir. Así el número que guarda la alerta
@@ -32,6 +34,9 @@ CONSTANTS: Dict[str, float] = {
     "SUELO_LIMITE_MIN": 50,
     "SUELO_LIMITE_MAX": 80,
     "NIVEL_PCT_CRITICO": 25,
+    # Riego (ACT-02): el objetivo es SUELO_LIMITE_MIN
+    "BOMBA_MAX_MS": 60_000,
+    "BOMBA_DESCANSO_MS": 300_000,
 }
 
 

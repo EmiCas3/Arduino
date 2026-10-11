@@ -33,6 +33,7 @@ export const LANDING = {
 export const PERMISSIONS = [
   { label: "Ver el estado de su vivero", roles: ALL },
   { label: "Ver los equipos de su vivero y si están encendidos", roles: ALL },
+  { label: "Cambiar el riego a automático o manual y regar a mano", roles: ALL },
   { label: "Consultar cualquier vivero", roles: ADMINS },
   { label: "Ver equipos desactivados", roles: ADMINS },
   { label: "Registrar, editar y desactivar equipos", roles: ADMINS },

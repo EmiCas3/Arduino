@@ -12,6 +12,13 @@ Detalles del hardware que se cuidan:
 - El nombre /dev/ttyACM0 puede cambiar a ACM1 al reconectar. Con
   SG_SERIAL_PORT=auto se usa /dev/serial/by-id/..., que es fijo.
 - Si el Arduino se desconecta, se reintenta cada 5 s sin tumbar el servicio.
+
+Órdenes al Arduino (ACT-02): `send()` las deja en una cola y el MISMO hilo que
+lee las escribe entre una línea y otra (readline tiene timeout de 1 s), así
+que nunca hay dos hilos usando el puerto. Después de abrir el puerto no se
+escribe nada hasta recibir la primera lectura válida: el Uno se reinicia al
+abrirlo y lo que llegue mientras corre su bootloader se pierde. Una orden que
+lleva más de 30 s esperando (Arduino desconectado) se descarta.
 """
 
 from __future__ import annotations
@@ -19,9 +26,12 @@ from __future__ import annotations
 import glob
 import json
 import logging
+import queue
 import threading
 import time
-from typing import Callable, Iterator, Optional
+from typing import Callable, Iterator, Optional, Tuple
+
+from gateway.protocol import MAX_COMMAND_AGE_SECONDS
 
 log = logging.getLogger("gateway.serial")
 
@@ -120,6 +130,34 @@ class SerialReader:
         self.valid_lines = 0
         self.invalid_lines = 0
         self.last_line_at: Optional[float] = None   # time.monotonic()
+        self.outbox: "queue.Queue[Tuple[float, bytes]]" = queue.Queue()
+        self.written = 0
+
+    def send(self, line: bytes) -> None:
+        """Encola una orden ya validada (protocol.to_line) para el Arduino."""
+        self.outbox.put((time.monotonic(), line))
+
+    def _flush(self, conn) -> None:
+        """Escribe las órdenes pendientes. Solo se llama desde el hilo lector."""
+        while True:
+            try:
+                queued_at, line = self.outbox.get_nowait()
+            except queue.Empty:
+                return
+            text = line.decode("ascii", "replace").strip()
+            age = time.monotonic() - queued_at
+            if age > MAX_COMMAND_AGE_SECONDS:
+                log.warning("Se descarta la orden %s: esperó %.0f s sin poder escribirse.", text, age)
+                continue
+            try:
+                conn.write(line)
+                if hasattr(conn, "flush"):
+                    conn.flush()
+            except AttributeError:
+                log.error("Este puerto no acepta escritura; se descarta la orden %s.", text)
+                continue
+            self.written += 1
+            log.info("Orden al Arduino: %s", text)
 
     def _lines(self, conn) -> Iterator[bytes]:
         while not self.stop.is_set():
@@ -166,9 +204,12 @@ class SerialReader:
 
     def _read_from(self, conn, port: str) -> None:
         first = True
+        ready = False   # el firmware ya arrancó: mandó una lectura válida
         opened_at = time.monotonic()
         silence_logged_at = opened_at
         for raw in self._lines(conn):
+            if ready:
+                self._flush(conn)
             now = time.monotonic()
             if not raw:
                 last = self.last_line_at if self.last_line_at and self.last_line_at > opened_at else opened_at
@@ -187,4 +228,7 @@ class SerialReader:
                 self.valid_lines += 1
                 self.last_line_at = now
                 self.on_reading(reading)
+                if not ready:
+                    ready = True
+                    self._flush(conn)   # lo que esperaba al reinicio, ya
             first = False

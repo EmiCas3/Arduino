@@ -69,6 +69,7 @@ a paso desde cero está en [`../deploy/pi5/README.md`](../deploy/pi5/README.md).
 | `SMARTGREENAI_MIN_READING_TS` | `2026-01-01T00:00:00Z` | Lecturas con `ts` anterior se rechazan (una Pi sin hora cree que es 1970). Debe llevar zona horaria |
 | `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` | `300` | Segundos que un `ts` puede ir adelante del reloj del servidor antes de rechazarse |
 | `SMARTGREENAI_ALERT_CLEAR_SECONDS` | `60` | Segundos seguidos sin el código de límite para cerrar una alerta (ALERT-01) |
+| `SMARTGREENAI_COMMAND_ACK_SECONDS` | `45` | Segundos que se espera que el Arduino confirme una orden antes de marcarla `expired` (ACT-02) |
 
 Puedes ponerlas en un archivo `.env` (está en `.gitignore`) o en la terminal:
 
@@ -93,10 +94,14 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/actuators` | Bearer | todos (productor: solo activos de su vivero) |
 | GET | `/actuators/{actuator_id}` | Bearer | todos (productor: solo activos de su vivero) |
 | PATCH | `/actuators/{actuator_id}` | Bearer | admin, super_admin |
+| POST | `/actuators/{actuator_id}/commands` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/readings/latest` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/actuators/status` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/alerts` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/irrigation` | Bearer | todos (productor: solo su vivero) |
+| PUT | `/greenhouses/{greenhouse_id}/irrigation/mode` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/actuators/events` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
 El contrato completo está en `../openapi.yaml` (v1.4.0).
@@ -114,9 +119,12 @@ El contrato completo está en `../openapi.yaml` (v1.4.0).
 - **El backend nunca pone la hora de la lectura**; solo agrega `received_at`.
 - Los campos que el contrato no define se ignoran sin rechazar la lectura.
 - **Después de guardar**, con cada lectura NUEVA y en orden de hora, se
-  actualiza el estado de los actuadores (ACT-04) y se evalúan las alertas
-  (ALERT-01). Si uno de esos pasos fallara, las lecturas ya quedaron
-  guardadas y el lote se responde igual con 202 (el error va al log).
+  actualiza el estado de los actuadores (ACT-04), se procesa el riego
+  (ACT-02) y se evalúan las alertas (ALERT-01). Si uno de esos pasos
+  fallara, las lecturas ya quedaron guardadas y el lote se responde igual
+  con 202 (el error va al log).
+- **La respuesta 202 trae `commands`**: las órdenes pendientes de ese
+  gateway para el Arduino (ACT-02). También en un lote de puras duplicadas.
 
 ### Estado de los actuadores (ACT-04)
 
@@ -148,7 +156,7 @@ sensor y umbral corresponde cada uno):
 - Los avisos y las fallas de sensor no crean alertas; un `null` no abre ni
   cierra nada. Las lecturas atrasadas se ignoran.
 
-**Si Fernando cambia un umbral en el `.ino`**, `tests/test_firmware_mirror.py`
+**Si alguien cambia un umbral en el `.ino`**, `tests/test_firmware_mirror.py`
 falla y dice qué número actualizar en `CONSTANTS` de `app/firmware.py` (es
 una línea). El backend no vuelve a comparar valores: solo anota el número en
 la alerta.
@@ -188,6 +196,33 @@ curl -X POST http://localhost:8000/api/v1/devices/pi-vivero-01/readings \
 #    "rejected": [{"index": 1, "reason": "ts: sin zona horaria: agrega Z (UTC) o un desfase como -06:00"}]}
 ```
 
+### Riego (ACT-02)
+
+El **Arduino** decide el riego automático con sus constantes (objetivo
+`SUELO_LIMITE_MIN` 50 %, máximo `BOMBA_MAX_MS` 60 s, descanso
+`BOMBA_DESCANSO_MS` 5 min). La **plataforma** (`app/irrigation.py`):
+
+- **Guarda el modo** que eligió una persona (`irrigation_mode`; sin fila =
+  `auto`, igual que el Arduino al arrancar) y se lo manda al Arduino.
+- **Manda órdenes manuales** a la bomba, solo en modo manual. Cada orden se
+  guarda `pending`, sale en el 202 del siguiente envío del gateway (`sent`)
+  y el Arduino la confirma con `cmd_id` (`confirmed`) o la rechaza con
+  `cmd_err` (`rejected`). Sin confirmación en 45 s: `expired`.
+- **Re-sincroniza el modo**: si el Arduino reporta otro modo (se reinició al
+  abrir el puerto), le vuelve a mandar el elegido (orden `system`). Un cambio
+  de modo solo cuenta como confirmado si el `modo` que reporta el Arduino
+  coincide; si no, se perdió (`expired`) y se manda otro.
+- **Registra cada encendido/apagado** (`actuator_events`) con su origen:
+  `auto` si lo decidió el firmware, `manual` si fue una persona (con su
+  nombre), y el motivo (`bomba_paro` del Arduino o, con el firmware de antes,
+  deducido de la lectura). Lo que provoca un reinicio del Arduino o una
+  re-sincronización del modo queda como `auto`, con ese motivo.
+- Si el firmware **no manda `modo`**, no acepta órdenes: no se genera
+  ninguna y las rutas de control responden 409 `firmware_without_control`.
+  El registro de acciones funciona igual (todo `auto`).
+
+El protocolo completo con el Arduino está en `../gateway/PROTOCOLO_ARDUINO.md`.
+
 ## Cómo funciona la seguridad
 
 - **Contraseñas:** `hashlib.scrypt` con salt (`scrypt$n=16384,r=8,p=1$...`).
@@ -219,11 +254,11 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-222 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (32, incluye el barrido de todas las rutas), actuadores
+262 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (40, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
-actuadores (18), alertas (36), espejo de umbrales del firmware (5) y
-frontend (14).
+actuadores (18), alertas (36), espejo de las constantes del firmware (5),
+riego (31) y frontend (15).
 
 ## Estructura
 
@@ -241,12 +276,13 @@ backend/
 │   ├── actuator_state.py # Estado reportado de cada actuador (ACT-04)
 │   ├── firmware.py      # Espejo de los umbrales del .ino (solo lectura)
 │   ├── alerts.py        # Motor de alertas (ALERT-01)
+│   ├── irrigation.py    # Riego: modo, órdenes, confirmaciones y registro (ACT-02)
 │   └── routers/
 │       ├── ingest.py    # POST readings (MON-04)
 │       ├── auth.py      # login / logout / me (AUTH-01)
-│       ├── actuators.py # CRUD sin DELETE de actuadores (CONF-05)
+│       ├── actuators.py # CRUD sin DELETE (CONF-05) y órdenes manuales (ACT-02)
 │       ├── readings.py  # viveros visibles y últimas lecturas (DASH-01)
-│       ├── control.py   # estado de los equipos (ACT-04)
+│       ├── control.py   # estado de los equipos (ACT-04) y riego (ACT-02)
 │       └── alerts.py    # alertas del vivero (ALERT-01)
 ├── tests/
 ├── requirements.txt
@@ -264,6 +300,10 @@ backend/
 | `actuators` | CONF-05 | Desactivar = `status='inactive'`; no hay DELETE |
 | `actuator_states` | ACT-04 | Último `bomba_activa` / `vent_activo` de cada actuador, con la hora de la lectura |
 | `alerts` | ALERT-01 | Una fila por alerta; índice único: a lo más una activa por sensor y vivero |
+| `controller_status` | ACT-02 | Lo último que reportó el firmware de cada gateway: `modo`, `cmd_id`, `cmd_err` |
+| `irrigation_mode` | ACT-02 | Modo elegido por vivero, con quién y cuándo (sin fila = `auto`) |
+| `actuator_commands` | ACT-02 | Órdenes al Arduino y su estado (pending → sent → confirmed / rejected / expired) |
+| `actuator_events` | ACT-02 | Cada encendido/apagado con origen (`auto`/`manual`), motivo y usuario |
 
 No hay migraciones: las tablas se crean con `CREATE TABLE IF NOT EXISTS`. Si
 algún día cambia una tabla **existente**, habrá que borrar la BD local o

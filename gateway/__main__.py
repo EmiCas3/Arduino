@@ -7,6 +7,11 @@ Uso (desde la carpeta raíz del repo, la que contiene gateway/):
     python -m gateway status              pendientes, enviadas, reloj, errores
     python -m gateway simulate            igual que run, con un Arduino simulado
     python -m gateway simulate --print    solo imprime líneas simuladas
+    python -m gateway simulate --seco     la tierra simulada arranca en el límite: en
+                                          unos segundos el Arduino empieza a regar solo
+    python -m gateway simulate --firmware-actual
+                                          simula el firmware de antes de ACT-02
+                                          (no acepta órdenes)
 
 La configuración vive en gateway/.env (ver .env.example).
 """
@@ -25,6 +30,7 @@ from gateway import __version__
 from gateway.buffer import Buffer
 from gateway.clock import Clock, utc_ms
 from gateway.config import Config, ConfigError, load_config
+from gateway.protocol import CommandError, to_line
 from gateway.sender import Dispatcher
 from gateway.serial_reader import SerialReader, find_port, open_serial
 
@@ -95,8 +101,26 @@ def run_gateway(
 
     # El buffer se crea aquí, antes de arrancar el hilo del Serial.
     buf = Buffer(cfg.buffer_db)
-    dispatcher = Dispatcher(cfg, buf, clock)
     reader_state = {}
+
+    def forward(commands) -> None:
+        """Órdenes que trajo un 202 del backend → cola del lector (ACT-02)."""
+        reader = reader_state.get("reader")
+        for command in commands:
+            try:
+                line = to_line(command)
+            except CommandError as exc:
+                log.error("El backend mandó una orden inválida; no se escribe al Arduino: %s", exc)
+                continue
+            if reader is None:
+                log.warning("Llegó la orden %s pero el lector del Serial no está listo; se descarta.",
+                            line.decode().strip())
+                continue
+            reader.send(line)
+            buf.set_meta(ultima_orden=line.decode().strip(),
+                         ultima_orden_en=utc_ms(clock.time()) if clock.is_synced() else None)
+
+    dispatcher = Dispatcher(cfg, buf, clock, on_commands=forward)
 
     def read_serial() -> None:
         reader_buf = None
@@ -222,6 +246,11 @@ def print_status(cfg: Config, clock: Optional[Clock] = None, out=print) -> int:
     ok = meta.get("ultimo_envio_ok")
     resumen = meta.get("ultimo_envio_resumen")
     out(row("Último envío OK", (ok or "—") + (f" ({resumen})" if ok and resumen else "")))
+    orden = meta.get("ultima_orden")
+    if orden:
+        out(row("Última orden", f"{meta.get('ultima_orden_en') or 'hora desconocida'}: {orden}"))
+    else:
+        out(row("Última orden", "— (ninguna desde que se creó el buffer)"))
     error = meta.get("ultimo_error")
     if error:
         cuando = meta.get("ultimo_error_en") or "hora desconocida"
@@ -248,6 +277,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Segundos entre lecturas (default 2, como el firmware)")
     sim.add_argument("--fallas", action="store_true",
                      help="De vez en cuando el DHT11 simulado manda null")
+    sim.add_argument("--seco", action="store_true",
+                     help="La tierra arranca en el límite: en unos segundos el Arduino riega solo")
+    sim.add_argument("--firmware-actual", action="store_true", dest="legacy",
+                     help="Simula el firmware de antes de ACT-02: riega solo y no acepta órdenes")
     return parser
 
 
@@ -279,9 +312,10 @@ def main(argv=None) -> int:
 
         from gateway.simulator import SimulatedArduino
 
+        options = dict(interval=args.interval, failures=args.fallas, dry=args.seco,
+                       legacy=args.legacy, sleep=lambda s: stop.wait(s))
         if args.only_print:
-            arduino = SimulatedArduino(interval=args.interval, failures=args.fallas,
-                                       sleep=lambda s: stop.wait(s))
+            arduino = SimulatedArduino(**options)
             while not stop.is_set():
                 line = arduino.readline()
                 if not stop.is_set():
@@ -290,8 +324,7 @@ def main(argv=None) -> int:
         log.info("Modo simulador: no se usa el puerto Serial.")
         return run_gateway(
             cfg,
-            open_port=lambda port, baud: SimulatedArduino(
-                interval=args.interval, failures=args.fallas, sleep=lambda s: stop.wait(s)),
+            open_port=lambda port, baud: SimulatedArduino(**options),
             find=lambda setting: "arduino-simulado",
             stop=stop,
         )

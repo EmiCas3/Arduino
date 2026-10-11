@@ -9,7 +9,8 @@
     manda al endpoint de la nube. El Arduino NO habla con internet: la Pi
     es el gateway. Este archivo define el contrato con la Pi.
 
-  Cubre: MON-01, MON-02 y la parte de firmware de MON-03.
+  Cubre: MON-01, MON-02, la parte de firmware de MON-03 y, desde el
+  Sprint 2, la de ACT-02 (modo automatico/manual y ordenes de la Pi).
 
   Cableado (todo al Arduino Uno, nada toca los GPIO de la Pi):
     DHT11 ............ VCC=5V  GND=GND  OUT=D2
@@ -42,6 +43,28 @@
     FALLA_DHT / FALLA_SUELO / FALLA_NIVEL  sensor desconectado o en corto
 
   "estado" resume la linea: OK | AVISO | ALERTA
+
+  ------------------------------------------------------------------
+  ORDENES DESDE LA PI (ACT-02) - una linea por orden, misma velocidad
+  ------------------------------------------------------------------
+    SG,<id>,MODO,AUTO ...... riega solo: arranca con la tierra abajo de
+                             SUELO_LIMITE_MIN y para al llegar a ese valor
+    SG,<id>,MODO,MANUAL .... NO riega solo: solo obedece BOMBA,ON / BOMBA,OFF
+    SG,<id>,BOMBA,ON ....... enciende la bomba (solo en MANUAL y con agua)
+    SG,<id>,BOMBA,OFF ...... apaga la bomba (solo en MANUAL)
+
+  <id> es un numero mayor que 0 que pone el backend. El Arduino contesta en
+  su siguiente linea JSON con:
+    "modo" ........ AUTO | MANUAL (al arrancar: AUTO, como siempre)
+    "cmd_id" ...... la ultima orden que aplico (0 al arrancar)
+    "cmd_err" ..... null, o por que no la aplico: MODO | TANQUE | FORMATO
+    "bomba_paro" .. por que se apago la bomba la ultima vez:
+                    OBJETIVO | TIEMPO | TANQUE | SENSOR | MODO | ORDEN
+  En cualquier modo la bomba se apaga sola al cumplir BOMBA_MAX_MS o si el
+  tanque llega a critico. Un riego automatico dura al menos BOMBA_MIN_MS y
+  entre dos espera BOMBA_DESCANSO_MS. Las lineas que no empiezan con "SG,"
+  o cuyo id no es un numero de 1 a 9 digitos se ignoran.
+  Detalle completo: gateway/PROTOCOLO_ARDUINO.md
 */
 
 #include <DHT.h>
@@ -103,6 +126,12 @@ const int LUZ_UMBRAL_SOL = 600;  // arriba de esto cuenta como sol pleno
 const unsigned int SOL_MIN_REQUERIDO = 360;       // 6 h en minutos
 const unsigned long SOMBRA_MAX_MS = 30UL * 60000; // 30 min sin sol pleno
 
+// ---------------- RIEGO (ACT-02) ----------------
+// El objetivo del riego automatico es SUELO_LIMITE_MIN (arriba).
+const unsigned long BOMBA_MAX_MS = 60UL * 1000;      // ningun riego dura mas de 1 min
+const unsigned long BOMBA_MIN_MS = 10UL * 1000;      // un riego automatico dura al menos 10 s
+const unsigned long BOMBA_DESCANSO_MS = 5UL * 60000; // espera entre riegos automaticos
+
 // ---------------- CONFIG ----------------
 const unsigned long INTERVALO_MS = 2000; // el DHT11 no admite menos de 2s
 unsigned long ultimaLectura = 0;
@@ -120,6 +149,22 @@ int solPrevMin = -1;          // minutos de sol del dia anterior
 // ---------------- ESTADO DE LA LINEA ACTUAL ----------------
 byte severidad = OK;
 bool primeraAlerta = true;
+
+// ---------------- ESTADO DEL RIEGO (ACT-02) ----------------
+bool modoAuto = true;              // al arrancar riega solo, como siempre
+bool bombaEncendida = false;
+unsigned long bombaDesdeMs = 0;    // cuando se encendio
+unsigned long bombaParoMs = 0;     // cuando se apago la ultima vez
+bool huboParo = false;
+bool bombaHabilitadaActual = false; // ultimo valor calculado en loop()
+const __FlashStringHelper *bombaParo = NULL; // por que se apago (o NULL)
+unsigned long cmdId = 0;                     // ultima orden aplicada
+const __FlashStringHelper *cmdErr = NULL;    // por que no se aplico (o NULL)
+
+// Linea de orden que va llegando por Serial
+char orden[32];
+byte ordenLen = 0;
+bool ordenDesbordada = false;
 
 void setup() {
   // Iniciar actuadores apagados ANTES de declararlos como salida
@@ -176,6 +221,130 @@ void campoBool(const __FlashStringHelper *nombre, bool valor) {
   Serial.print(nombre);
   Serial.print(F("\":"));
   Serial.print(valor ? F("true") : F("false"));
+}
+
+// Texto entre comillas, o null si no hay
+void campoTexto(const __FlashStringHelper *nombre, const __FlashStringHelper *valor) {
+  Serial.print(F(",\""));
+  Serial.print(nombre);
+  Serial.print(F("\":"));
+  if (valor == NULL) {
+    Serial.print(F("null"));
+  } else {
+    Serial.print('"');
+    Serial.print(valor);
+    Serial.print('"');
+  }
+}
+
+// ---------------- BOMBA Y ORDENES DE LA PI (ACT-02) ----------------
+void encenderBomba() {
+  bombaEncendida = true;
+  bombaDesdeMs = millis();
+  digitalWrite(PIN_BOMBA, HIGH);
+}
+
+void apagarBomba(const __FlashStringHelper *motivo) {
+  if (!bombaEncendida)
+    return;
+  bombaEncendida = false;
+  bombaParoMs = millis();
+  huboParo = true;
+  bombaParo = motivo;
+  digitalWrite(PIN_BOMBA, LOW);
+}
+
+// Se llama cada 2 s con la lectura nueva.
+// AUTO: arranca con la tierra abajo de SUELO_LIMITE_MIN (si ya paso el
+// descanso) y para al llegar, pero no antes de BOMBA_MIN_MS: si la tierra
+// esta justo en el limite, el ruido del sensor (49/50/49...) no hace que la
+// bomba prenda y apague cada 2 s. MANUAL: no decide nada, solo obedece
+// ordenes. En los dos modos: se apaga al cumplir BOMBA_MAX_MS o si el tanque
+// llega a critico (la bomba es sumergible y se quema en seco).
+void controlarBomba(int sueloPct, bool riegoSugerido, bool bombaHabilitada) {
+  unsigned long ahora = millis();
+  if (bombaEncendida) {
+    if (!bombaHabilitada)
+      apagarBomba(F("TANQUE"));
+    else if (ahora - bombaDesdeMs >= BOMBA_MAX_MS)
+      apagarBomba(F("TIEMPO"));
+    else if (modoAuto && sueloPct < 0)
+      apagarBomba(F("SENSOR"));
+    else if (modoAuto && !riegoSugerido && ahora - bombaDesdeMs >= BOMBA_MIN_MS)
+      apagarBomba(F("OBJETIVO"));
+  } else if (modoAuto && riegoSugerido && bombaHabilitada &&
+             (!huboParo || ahora - bombaParoMs >= BOMBA_DESCANSO_MS)) {
+    encenderBomba();
+  }
+}
+
+// true si el texto son solo digitos (1 a 9): "17" si, "-1", "7x" o "" no.
+bool esNumeroDeOrden(const char *texto) {
+  if (texto == NULL || texto[0] == '\0' || strlen(texto) > 9)
+    return false;
+  for (const char *c = texto; *c; ++c)
+    if (*c < '0' || *c > '9')
+      return false;
+  return true;
+}
+
+// Aplica una orden "SG,<id>,<equipo>,<accion>" (ya sin el salto de linea).
+void aplicarOrden(char *linea) {
+  char *prefijo = strtok(linea, ",");
+  if (prefijo == NULL || strcmp(prefijo, "SG") != 0)
+    return; // ruido o eco de una terminal: se ignora
+  char *textoId = strtok(NULL, ",");
+  char *equipo = strtok(NULL, ",");
+  char *accion = strtok(NULL, ",");
+  char *sobra = strtok(NULL, ",");
+  unsigned long id = esNumeroDeOrden(textoId) ? strtoul(textoId, NULL, 10) : 0;
+  if (id == 0)
+    return; // sin numero de orden valido no hay a quien contestarle
+
+  cmdId = id;
+  cmdErr = NULL;
+  if (equipo == NULL || accion == NULL || sobra != NULL) {
+    cmdErr = F("FORMATO");
+  } else if (strcmp(equipo, "MODO") == 0 && strcmp(accion, "AUTO") == 0) {
+    if (!modoAuto)
+      apagarBomba(F("MODO")); // la decision vuelve a ser del Arduino
+    modoAuto = true;
+  } else if (strcmp(equipo, "MODO") == 0 && strcmp(accion, "MANUAL") == 0) {
+    apagarBomba(F("MODO")); // un riego automatico no sigue en manual
+    modoAuto = false;
+  } else if (strcmp(equipo, "BOMBA") == 0 &&
+             (strcmp(accion, "ON") == 0 || strcmp(accion, "OFF") == 0)) {
+    if (modoAuto)
+      cmdErr = F("MODO"); // en automatico la bomba la decide el Arduino
+    else if (strcmp(accion, "OFF") == 0)
+      apagarBomba(F("ORDEN"));
+    else if (!bombaHabilitadaActual)
+      cmdErr = F("TANQUE");
+    else if (!bombaEncendida)
+      encenderBomba();
+  } else {
+    cmdErr = F("FORMATO");
+  }
+}
+
+// Lee lo que mande la Pi sin bloquear. Una linea demasiado larga se
+// descarta completa.
+void leerOrdenes() {
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (ordenLen > 0 && !ordenDesbordada) {
+        orden[ordenLen] = '\0';
+        aplicarOrden(orden);
+      }
+      ordenLen = 0;
+      ordenDesbordada = false;
+    } else if (ordenLen < sizeof(orden) - 1) {
+      orden[ordenLen++] = c;
+    } else {
+      ordenDesbordada = true;
+    }
+  }
 }
 
 void alerta(const __FlashStringHelper *codigo, byte nivel) {
@@ -277,6 +446,8 @@ void evaluarLuz() {
 }
 
 void loop() {
+  leerOrdenes(); // las ordenes de la Pi se atienden en cuanto llegan
+
   if (millis() - ultimaLectura < INTERVALO_MS)
     return;
   ultimaLectura = millis();
@@ -310,8 +481,10 @@ void loop() {
   // Ventilador: se enciende cuando la temperatura o humedad superan el ideal.
   digitalWrite(PIN_VENT, ventAlta ? HIGH : LOW);
 
-  // Bomba: solo riega si el suelo esta seco Y el tanque tiene agua suficiente.
-  bool bombaActiva = riegoSugerido && bombaHabilitada;
+  // Bomba (ACT-02): ver controlarBomba(). Solo riega con agua en el tanque.
+  bombaHabilitadaActual = bombaHabilitada;
+  controlarBomba(sueloPct, riegoSugerido, bombaHabilitada);
+  bool bombaActiva = bombaEncendida;
   digitalWrite(PIN_BOMBA, bombaActiva ? HIGH : LOW);
 
   // ---- salida JSON ----
@@ -347,6 +520,14 @@ void loop() {
   Serial.print('"');
   campoBool(F("vent_activo"), ventAlta);
 
+  // Riego (ACT-02): modo, ultima orden aplicada y por que paro la bomba
+  Serial.print(F(",\"modo\":\""));
+  Serial.print(modoAuto ? F("AUTO") : F("MANUAL"));
+  Serial.print(F("\",\"cmd_id\":"));
+  Serial.print(cmdId);
+  campoTexto(F("cmd_err"), cmdErr);
+  campoTexto(F("bomba_paro"), bombaParo);
+
   Serial.print(F(",\"alertas\":["));
   severidad = OK;
   primeraAlerta = true;
@@ -369,7 +550,9 @@ void loop() {
   {"ms":148022,"temp_c":24.2,"hum_aire_pct":38.0,"suelo_raw":565,
    "suelo_pct":0,"nivel_raw":5,"nivel_pct":2,"luz_raw":306,"luz_nivel":717,
    "es_dia":true,"sol_min_hoy":42,"sol_min_prev":null,"riego_sugerido":true,
-   "bomba_habilitada":false,"vent":"BASE",
+   "bomba_habilitada":false,"bomba_activa":false,"vent":"BASE",
+   "vent_activo":false,"modo":"AUTO","cmd_id":0,"cmd_err":null,
+   "bomba_paro":null,
    "alertas":["HUM_AIRE_BAJA","SUELO_SECO","TANQUE_UN_CUARTO"],"estado":"ALERTA"}
 
   (va todo en una sola linea, sin saltos)

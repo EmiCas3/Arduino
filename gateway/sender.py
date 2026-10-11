@@ -4,7 +4,9 @@ Envío por lotes al endpoint de MON-04: POST {SG_API_URL}/devices/{id}/readings.
 Qué pasa con cada respuesta del backend:
 
     202              enviadas; las que vengan en `rejected` quedan como
-                     rechazadas con su motivo (no se borran)
+                     rechazadas con su motivo (no se borran). Si trae
+                     `commands` (ACT-02), se pasan a quien las escribe al
+                     Arduino (ver protocol.py)
     401 / 403 / 404  API key o device_id mal configurados: se dice claro en el
                      log, se conserva todo y se reintenta con espera creciente
     400 / 413 / 422  el backend rechazó el lote completo: se reenvía de una en
@@ -25,7 +27,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from gateway import __version__
@@ -49,6 +51,7 @@ class SendResult:
     duplicates: int = 0
     rejected: List[Tuple[int, str]] = field(default_factory=list)  # (índice, motivo)
     message: str = ""
+    commands: List[dict] = field(default_factory=list)  # órdenes para el Arduino (ACT-02)
 
 
 class Backoff:
@@ -122,6 +125,9 @@ def post_readings(cfg: Config, rows: List[Row]) -> SendResult:
                 (int(item["index"]), str(item.get("reason", "")))
                 for item in data.get("rejected", [])
             ]
+            commands = data.get("commands") or []
+            if isinstance(commands, list):
+                result.commands = [c for c in commands if isinstance(c, dict)]
         except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
             result.message = "202 con una respuesta que no se pudo leer"
         return result
@@ -148,14 +154,17 @@ class Dispatcher:
 
     `tick()` se llama seguido desde el bucle principal; solo envía cuando ya
     toca (cada SG_SEND_INTERVAL, o de inmediato si quedan más pendientes).
+    Las órdenes que traiga un 202 se le pasan a `on_commands` (ACT-02).
     """
 
-    def __init__(self, cfg: Config, buffer, clock, *, post=post_readings, monotonic=None) -> None:
+    def __init__(self, cfg: Config, buffer, clock, *, post=post_readings, monotonic=None,
+                 on_commands: Optional[Callable[[List[dict]], None]] = None) -> None:
         self.cfg = cfg
         self.buffer = buffer
         self.clock = clock
         self.post = post
         self.monotonic = monotonic or time.monotonic
+        self.on_commands = on_commands
         self.backoff = Backoff()
         self.next_at = 0.0
         self.failing = False
@@ -221,6 +230,8 @@ class Dispatcher:
                 sent_ids.append(row_id)
         sent_at = self._now_utc()
         self.buffer.mark_sent(sent_ids, sent_at)
+        if result.commands and self.on_commands is not None:
+            self.on_commands(result.commands)
 
         recovered = self.failing
         if recovered:

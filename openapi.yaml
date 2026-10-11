@@ -30,6 +30,13 @@ info:
     manda un codigo de LIMITE, el backend crea una alerta (una sola mientras
     la condicion siga) y `GET /greenhouses/{greenhouse_id}/alerts` la devuelve
     con sensor, valor, umbral y hora.
+    Riego (ACT-02): el Arduino decide el riego automatico con sus constantes;
+    la plataforma guarda el modo (`PUT /greenhouses/{greenhouse_id}/irrigation/mode`),
+    manda ordenes manuales a la bomba (`POST /actuators/{actuator_id}/commands`)
+    que viajan en `commands` de la respuesta de la ingesta, y registra cada
+    encendido/apagado como automatico o manual
+    (`GET /greenhouses/{greenhouse_id}/actuators/events`). La lectura agrega
+    `modo`, `cmd_id`, `cmd_err` y `bomba_paro`.
 
     ## Convenciones que no se negocian
 
@@ -69,7 +76,7 @@ info:
 
     | Rol | Puede |
     |---|---|
-    | `producer` | Ver su vivero asignado y sus actuadores activos |
+    | `producer` | Ver su vivero asignado y sus actuadores activos; cambiar el modo de riego y regar a mano en su vivero (v1.4.0) |
     | `admin` | Todo lo anterior en cualquier vivero + registrar y editar actuadores |
     | `super_admin` | Todo lo de `admin` (+ roles y bitacora en sprints futuros) |
 
@@ -115,6 +122,8 @@ tags:
     description: Estado de los equipos del vivero (ACT-04)
   - name: alerts
     description: Alertas por umbral del firmware (ALERT-01)
+  - name: irrigation
+    description: Riego automatico y manual (ACT-02)
 
 security:
   - ApiKeyAuth: []
@@ -241,6 +250,13 @@ paths:
         Los campos que el contrato no define se ignoran sin rechazar la
         lectura. Desde v1.4.0, `bomba_activa` y `vent_activo` SI se usan:
         actualizan el estado de los actuadores activos de ese gateway (ACT-04).
+
+        Ordenes para el Arduino (v1.4.0, ACT-02): la respuesta 202 trae en
+        `commands` las ordenes pendientes de ESTE gateway (cambio de modo u
+        ordenes manuales a la bomba). El gateway las escribe por Serial como
+        `SG,<id>,MODO,AUTO|MANUAL` o `SG,<id>,BOMBA,ON|OFF` y el Arduino las
+        confirma en sus siguientes lecturas con `cmd_id` / `cmd_err`. Ver
+        `gateway/PROTOCOLO_ARDUINO.md`. Un gateway viejo puede ignorar el campo.
       operationId: ingestReadings
       requestBody:
         required: true
@@ -552,6 +568,59 @@ paths:
 
   # ── Sprint 2: ultimas lecturas (DASH-01) ──────────────────────────────
 
+  /actuators/{actuator_id}/commands:
+    parameters:
+      - $ref: '#/components/parameters/ActuatorId'
+    post:
+      tags: [irrigation]
+      summary: Encender o apagar la bomba a mano (ACT-02)
+      description: |
+        Solo con el riego en modo `manual` (en automatico decide el Arduino) y
+        solo para la bomba. La orden queda `pending`, sale hacia el gateway en
+        la respuesta de su siguiente envio de lecturas (`sent`) y el Arduino
+        la confirma en su siguiente lectura (`confirmed` o `rejected`). Sin
+        confirmacion en `SMARTGREENAI_COMMAND_ACK_SECONDS` (45) queda
+        `expired`. Encender dura como maximo `BOMBA_MAX_MS` del firmware. Una
+        orden nueva reemplaza a la que aun no salia (`superseded`).
+
+        Errores: 404 si el actuador no existe, esta desactivado o es de otro
+        vivero; 422 `not_controllable` si no es la bomba; 409 `auto_mode`,
+        `tank_low`, `no_gateway`, `firmware_without_control`,
+        `gateway_inactive` o `no_report`. Todos los roles; un `producer` solo
+        los equipos de su vivero.
+      operationId: commandActuator
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandCreate'
+      responses:
+        '202':
+          description: Orden guardada; sale en el siguiente envio del gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandOut'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '404':
+          description: El actuador no esta registrado, esta desactivado o no es visible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '409':
+          description: No se puede mandar la orden ahora (ver la descripcion)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   /greenhouses:
     get:
       tags: [readings]
@@ -652,6 +721,129 @@ paths:
           $ref: '#/components/responses/SessionRequired'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  /greenhouses/{greenhouse_id}/irrigation:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [irrigation]
+      summary: Modo de riego y si el Arduino acepta ordenes (ACT-02)
+      description: |
+        `mode` es el que eligio una persona (`auto` por defecto, igual que el
+        Arduino al arrancar). `reported_mode` es el que reporta el Arduino
+        (`null` si su firmware no acepta ordenes). `controllable` dice si se
+        le pueden mandar ordenes y `detail` por que no. `firmware` trae el
+        objetivo, el tiempo maximo y el descanso que usa el Arduino (viven en
+        el firmware). Todos los roles; un `producer` solo su vivero.
+      operationId: getIrrigation
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Estado del riego
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IrrigationStatus'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /greenhouses/{greenhouse_id}/irrigation/mode:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [irrigation]
+      summary: Cambiar a riego automatico o manual (ACT-02)
+      description: |
+        Guarda el modo elegido (quien y cuando) y le manda la orden al
+        Arduino por el gateway. En `manual` el Arduino no riega solo y, si
+        estaba regando, apaga la bomba. Si el Arduino se reinicia (vuelve a
+        AUTO), el backend se lo vuelve a mandar solo. 409 si no se le pueden
+        mandar ordenes (`no_pump`, `gateway_inactive`, `no_report`,
+        `firmware_without_control`). Todos los roles; un `producer` solo su
+        vivero.
+      operationId: setIrrigationMode
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModeChange'
+      responses:
+        '200':
+          description: Modo guardado y orden en camino
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IrrigationStatus'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Al Arduino no se le pueden mandar ordenes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /greenhouses/{greenhouse_id}/actuators/events:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [irrigation]
+      summary: Ultimos encendidos y apagados (ACT-02)
+      description: |
+        Cada encendido o apagado que reporto el Arduino, con su origen:
+        `auto` (lo decidio el firmware) o `manual` (una persona: trae su
+        nombre), y el motivo (`Tierra al 42 %, abajo del objetivo de 50 %`,
+        `Objetivo alcanzado`, `Tiempo maximo (60 s)`, `Orden manual`…). Los
+        mas recientes primero. Todos los roles; un `producer` solo su vivero.
+      operationId: listActuatorEvents
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: Acciones de los equipos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorEventList'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   /greenhouses/{greenhouse_id}/alerts:
     parameters:
@@ -968,6 +1160,31 @@ components:
           description: |
             (v1.4.0) El ventilador quedo encendido. Alimenta el estado del
             actuador tipo `fan` de este gateway.
+        modo:
+          type: string
+          enum: [AUTO, MANUAL]
+          description: |
+            (v1.4.0, ACT-02) `AUTO`: el Arduino riega solo con sus constantes.
+            `MANUAL`: no riega solo, solo obedece ordenes. Si no viene, el
+            firmware no acepta ordenes de la plataforma.
+        cmd_id:
+          type: integer
+          minimum: 0
+          description: (v1.4.0) Ultima orden aplicada (`0` al arrancar)
+        cmd_err:
+          type: string
+          nullable: true
+          pattern: '^[A-Z_]{1,20}$'
+          description: |
+            (v1.4.0) Por que no aplico la orden `cmd_id`: `MODO` (bomba en
+            automatico), `TANQUE` (tanque critico) o `FORMATO`.
+        bomba_paro:
+          type: string
+          nullable: true
+          pattern: '^[A-Z_]{1,20}$'
+          description: |
+            (v1.4.0) Por que se apago la bomba la ultima vez: `OBJETIVO`,
+            `TIEMPO`, `TANQUE`, `SENSOR`, `MODO` u `ORDEN`.
 
         estado:
           type: string
@@ -1049,6 +1266,13 @@ components:
               reason: 'ts: sin zona horaria: agrega Z (UTC) o un desfase como -06:00'
             - index: 45
               reason: 'suelo_pct: ensure this value is less than or equal to 100'
+        commands:
+          type: array
+          description: |
+            (v1.4.0, ACT-02) Ordenes pendientes para el Arduino de este
+            gateway, en el orden en que deben escribirse.
+          items:
+            $ref: '#/components/schemas/GatewayCommand'
 
     Error:
       type: object
@@ -1414,6 +1638,11 @@ components:
           type: integer
           nullable: true
           description: Segundos desde esa lectura
+        last_command:
+          allOf:
+            - $ref: '#/components/schemas/CommandOut'
+          nullable: true
+          description: Ultima orden manual a este equipo en los ultimos 10 min (ACT-02)
 
     ActuatorLiveList:
       type: object
@@ -1432,6 +1661,195 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ActuatorLive'
+
+    # ── Sprint 2: riego (ACT-02) ───────────────────────────────────────
+
+    GatewayCommand:
+      type: object
+      required: [id, kind, value]
+      description: |
+        Orden para el Arduino que el gateway escribe por Serial:
+        `SG,<id>,MODO,<value>` (kind `mode`) o `SG,<id>,BOMBA,<value>` (kind `pump`).
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          example: 18
+        kind:
+          type: string
+          enum: [mode, pump]
+        value:
+          type: string
+          enum: [AUTO, MANUAL, 'ON', 'OFF']
+        actuator_id:
+          type: string
+          nullable: true
+          example: bomba-riego-01
+
+    CommandCreate:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+          enum: ['on', 'off']
+
+    CommandOut:
+      type: object
+      required: [id, kind, value, trigger, reason, status, created_at]
+      properties:
+        id:
+          type: integer
+        actuator_id:
+          type: string
+          nullable: true
+        kind:
+          type: string
+          enum: [mode, pump]
+        value:
+          type: string
+          enum: [AUTO, MANUAL, 'ON', 'OFF']
+        trigger:
+          type: string
+          enum: [manual, system]
+          description: |
+            `manual` = la pidio una persona; `system` = el backend re-sincroniza
+            el modo despues de un reinicio del Arduino.
+        reason:
+          type: string
+          example: 'Orden manual: regar'
+        status:
+          type: string
+          enum: [pending, sent, confirmed, rejected, expired, superseded]
+        error:
+          type: string
+          nullable: true
+          description: '`cmd_err` del Arduino si la rechazo (MODO, TANQUE, FORMATO)'
+        user_name:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+        confirmed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    FirmwareIrrigation:
+      type: object
+      required: [target_pct, max_run_seconds, rest_seconds]
+      description: Parametros de riego del firmware (solo lectura)
+      properties:
+        target_pct:
+          type: number
+          example: 50
+          description: SUELO_LIMITE_MIN
+        max_run_seconds:
+          type: integer
+          example: 60
+          description: BOMBA_MAX_MS
+        rest_seconds:
+          type: integer
+          example: 300
+          description: BOMBA_DESCANSO_MS
+
+    ModeChange:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [auto, manual]
+
+    IrrigationStatus:
+      type: object
+      required: [greenhouse_id, mode, controllable, detail, firmware]
+      properties:
+        greenhouse_id:
+          type: string
+        mode:
+          type: string
+          enum: [auto, manual]
+          description: Modo elegido en la plataforma (`auto` por defecto)
+        reported_mode:
+          type: string
+          enum: [auto, manual]
+          nullable: true
+          description: Modo que reporta el Arduino; `null` si no acepta ordenes
+        controllable:
+          type: boolean
+        detail:
+          type: string
+          example: El Arduino acepta ordenes de la plataforma.
+        controller_device_id:
+          type: string
+          nullable: true
+          example: pi-vivero-01
+        reported_at:
+          type: string
+          format: date-time
+          nullable: true
+        mode_changed_at:
+          type: string
+          format: date-time
+          nullable: true
+        mode_changed_by:
+          type: string
+          nullable: true
+        last_mode_command:
+          allOf:
+            - $ref: '#/components/schemas/CommandOut'
+          nullable: true
+          description: Ultima orden de cambio de modo en los ultimos 10 min
+        firmware:
+          $ref: '#/components/schemas/FirmwareIrrigation'
+
+    ActuatorEventOut:
+      type: object
+      required: [id, actuator_id, actuator_name, actuator_type, event, origin, reason, reading_ts]
+      properties:
+        id:
+          type: integer
+        actuator_id:
+          type: string
+        actuator_name:
+          type: string
+        actuator_type:
+          $ref: '#/components/schemas/ActuatorType'
+        event:
+          type: string
+          enum: ['on', 'off']
+        origin:
+          type: string
+          enum: [auto, manual]
+          description: '`auto` = lo decidio el firmware; `manual` = una persona'
+        reason:
+          type: string
+          example: Tierra al 42 %, abajo del objetivo de 50 %
+        user_name:
+          type: string
+          nullable: true
+        reading_ts:
+          type: string
+          format: date-time
+          description: Hora de la lectura que reporto el cambio
+
+    ActuatorEventList:
+      type: object
+      required: [greenhouse_id, events]
+      properties:
+        greenhouse_id:
+          type: string
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActuatorEventOut'
 
     # ── Sprint 2: alertas (ALERT-01) ──────────────────────────────────
 

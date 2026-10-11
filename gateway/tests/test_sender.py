@@ -35,7 +35,7 @@ def test_request_has_api_key_ts_and_original_fields(cfg, buffer, backend_stub):
     sent = req["body"]["readings"]
     assert [r["ts"] for r in sent] == [row[1] for row in rows]
     assert sent[0]["suelo_pct"] == 62 and sent[0]["sol_min_prev"] is None
-    assert sent[0]["bomba_activa"] is True     # se reenvía sin tocar; el backend lo ignora
+    assert sent[0]["bomba_activa"] is True     # se reenvía sin tocar (el backend lo usa en ACT-04)
 
 
 # ── 202 ────────────────────────────────────────────────────────────────

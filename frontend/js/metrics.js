@@ -297,3 +297,58 @@ export function titleWithCount(title, count) {
   const base = String(title || "").replace(/^\(\d+\)\s+/, "");
   return count > 0 ? `(${count}) ${base}` : base;
 }
+
+// ── Riego: modo, órdenes y acciones (ACT-02) ──────────────────────────
+
+const COMMAND_ERRORS = {
+  TANQUE: "el tanque está bajo",
+  MODO: "estaba en automático",
+  FORMATO: "la orden no era válida",
+};
+const ORDER_TEXT = { ON: "regar", OFF: "detener", AUTO: "pasar a automático", MANUAL: "pasar a manual" };
+
+/**
+ * Qué decir de la última orden (de bomba o de modo): null si no hay nada
+ * que avisar (ya se aplicó o es vieja). { tone: "wait" | "warn", text }.
+ */
+export function commandFeedback(command) {
+  if (!command) return null;
+  const what = ORDER_TEXT[command.value] || command.value;
+  if (command.status === "pending" || command.status === "sent") {
+    return { tone: "wait", text: `Orden enviada (${what}). Esperando al Arduino…` };
+  }
+  if (command.status === "rejected") {
+    const why = COMMAND_ERRORS[command.error] || command.error || "sin motivo";
+    return { tone: "warn", text: `El Arduino no aplicó la orden (${what}): ${why}.` };
+  }
+  if (command.status === "expired") {
+    return { tone: "warn", text: `El Arduino no confirmó la orden (${what}). Revisa que el gateway y el Arduino estén conectados.` };
+  }
+  return null;
+}
+
+/** Explicación del modo de riego con los números del firmware. */
+export function modeHelp(irrigation) {
+  if (!irrigation) return "";
+  const { target_pct: target, max_run_seconds: max } = irrigation.firmware;
+  return irrigation.mode === "manual"
+    ? `Manual: el Arduino no riega solo. Solo actúan las órdenes (cada riego dura como máximo ${max} s).`
+    : `Automático: el Arduino riega solo cuando la tierra baja de ${target} % y para al llegar (máximo ${max} s por riego).`;
+}
+
+const EVENT_NOUNS = {
+  pump: ["Bomba encendida", "Bomba apagada"],
+  fan: ["Ventilador encendido", "Ventilador apagado"],
+};
+
+/** Una acción de /actuators/events, lista para mostrar. */
+export function eventText(event) {
+  const nouns = EVENT_NOUNS[event.actuator_type] || [`${event.actuator_name}: encendido`, `${event.actuator_name}: apagado`];
+  const manual = event.origin === "manual";
+  return {
+    what: event.event === "on" ? nouns[0] : nouns[1],
+    origin: manual ? (event.user_name ? `Manual · ${event.user_name}` : "Manual") : "Automático",
+    manual,
+    reason: event.reason || "",
+  };
+}

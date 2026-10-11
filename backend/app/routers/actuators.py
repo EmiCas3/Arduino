@@ -1,5 +1,5 @@
 """
-Registro de actuadores (CONF-05).
+Registro de actuadores (CONF-05) y órdenes manuales a la bomba (ACT-02).
 
 Un Administrador registra los equipos que realmente existen en un vivero
 (bomba, ventilador, malla sombra, luz) con su vivero-área y su canal de
@@ -10,10 +10,11 @@ por get_active_actuator_or_404().
 Desactivar NO borra: el registro y su historial se conservan (no hay DELETE).
 
 Permisos (AUTH-02):
-    POST  /actuators          admin, super_admin
-    GET   /actuators          todos; un productor solo ve los ACTIVOS de su vivero
-    GET   /actuators/{id}     todos; un productor solo ve los ACTIVOS de su vivero
-    PATCH /actuators/{id}     admin, super_admin
+    POST  /actuators                 admin, super_admin
+    GET   /actuators                 todos; un productor solo ve los ACTIVOS de su vivero
+    GET   /actuators/{id}            todos; un productor solo ve los ACTIVOS de su vivero
+    PATCH /actuators/{id}            admin, super_admin
+    POST  /actuators/{id}/commands   todos; un productor solo los de su vivero (ACT-02)
 """
 
 import sqlite3
@@ -22,6 +23,7 @@ from typing import List, Optional
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
+from app import irrigation
 from app.database import get_db
 from app.dependencies import (
     ADMIN_ROLES,
@@ -39,6 +41,9 @@ from app.models import (
     ActuatorStatus,
     ActuatorType,
     ActuatorUpdate,
+    CommandAction,
+    CommandCreate,
+    CommandOut,
     ErrorResponse,
 )
 
@@ -327,3 +332,58 @@ async def update_actuator(
         )
 
     return _to_model(await _fetch(db, actuator_id))
+
+
+# ── Órdenes manuales (ACT-02) ───────────────────────────────────────────
+
+@router.post(
+    "/{actuator_id}/commands",
+    response_model=CommandOut,
+    status_code=202,
+    responses=_ERRORS,
+    summary="Encender o apagar la bomba a mano",
+    description=(
+        "Solo con el riego en modo manual (en automático decide el Arduino). "
+        "La orden sale hacia el gateway en su siguiente envío de lecturas y el "
+        "Arduino la confirma en su siguiente lectura; mientras tanto queda "
+        "`pending`/`sent`. Encender dura como máximo BOMBA_MAX_MS del firmware. "
+        "Por ahora solo la bomba acepta órdenes. Todos los roles; un productor "
+        "solo los equipos de su vivero."
+    ),
+)
+async def command_actuator(
+    body: CommandCreate,
+    actuator_id: str = Path(..., pattern=SLUG_REGEX),
+    user: dict = Depends(require_roles(*ALL_ROLES)),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> CommandOut:
+    actuator = await get_active_actuator_or_404(db, actuator_id, user)
+    if actuator["type"] != "pump":
+        raise _error(422, "not_controllable", "Por ahora solo la bomba acepta órdenes desde la plataforma.")
+    if not actuator["gateway_device_id"]:
+        raise _error(409, "no_gateway", "La bomba no tiene un gateway asignado: no hay por dónde mandarle la orden.")
+
+    controller = await irrigation.controller_of_device(db, actuator["gateway_device_id"])
+    problem, message = irrigation.control_problem(controller)
+    if problem is not None:
+        raise _error(409, problem, message)
+    if (await irrigation.chosen_mode(db, actuator["greenhouse_id"]))["mode"] != "manual":
+        raise _error(409, "auto_mode", "El riego está en automático: cámbialo a manual para controlar la bomba tú.")
+
+    if body.action == CommandAction.on:
+        cursor = await db.execute(
+            "SELECT enabled FROM actuator_states WHERE actuator_id = ?", (actuator_id,))
+        state = await cursor.fetchone()
+        if state is not None and state["enabled"] == 0:
+            raise _error(409, "tank_low", "Tanque bajo: el Arduino no enciende la bomba sin agua.")
+
+    now = utcnow()
+    command_id = await irrigation.queue_command(
+        db, greenhouse_id=actuator["greenhouse_id"], device_id=actuator["gateway_device_id"],
+        kind="pump", value=body.action.value.upper(), trigger="manual", user_id=user["id"],
+        actuator_id=actuator_id, now=now,
+        reason="Orden manual: regar" if body.action == CommandAction.on else "Orden manual: detener",
+    )
+    await db.commit()
+    cursor = await db.execute(f"{irrigation.COMMAND_SELECT} WHERE c.id = ?", (command_id,))
+    return irrigation.command_out(irrigation.command_row(await cursor.fetchone()))

@@ -9,7 +9,12 @@ vuelve la conexión.
 ```
 Arduino Uno ──USB 9600──▶ serial_reader ─▶ clock (hora UTC) ─▶ buffer.db ─▶ sender ──HTTP + X-API-Key──▶ backend
  (JSON cada 2 s)                                                (SQLite)     (lotes de 100 cada 10 s)
+      ▲                                                                         │
+      └──── "SG,18,BOMBA,ON" ◀── serial_reader ◀── protocol ◀── órdenes en el 202 (ACT-02)
 ```
+
+Desde ACT-02 también le **escribe** al Arduino, pero solo las órdenes del
+protocolo (`PROTOCOLO_ARDUINO.md`), validadas una por una.
 
 Solo usa `pyserial` y la librería estándar de Python. Nada que compilar.
 
@@ -33,14 +38,20 @@ Solo usa `pyserial` y la librería estándar de Python. Nada que compilar.
 - `null` = sensor caído; se reenvía tal cual, nunca como 0.
 - La primera línea tras abrir el puerto puede llegar cortada (el Arduino se
   reinicia al abrirlo): se ignora y queda en el log.
-- Los campos extra del firmware (`bomba_activa`, `vent_activo`) se reenvían; el
-  backend los ignora hasta ACT-04.
+- Los campos extra del firmware se reenvían tal cual (`bomba_activa`,
+  `vent_activo`, `modo`, `cmd_id`…); el backend los usa en ACT-04 y ACT-02.
+- **Al Arduino solo se le escriben órdenes válidas del protocolo**
+  (`SG,<id>,MODO,AUTO|MANUAL`, `SG,<id>,BOMBA,ON|OFF`). El mismo hilo que lee
+  el puerto las escribe entre una línea y otra, y solo después de la primera
+  lectura válida tras abrir el puerto (el Uno se reinicia al abrirlo). Una
+  orden que esperó más de 30 s (Arduino desconectado) se descarta: el backend
+  ya la dio por perdida.
 
 ## Qué hace con cada respuesta
 
 | Respuesta del backend | Qué hace |
 |---|---|
-| 202 | Marca `enviada`. Las que vengan en `rejected` quedan `rechazada` con su motivo (no se borran) |
+| 202 | Marca `enviada`. Las que vengan en `rejected` quedan `rechazada` con su motivo (no se borran). Las órdenes de `commands` se escriben al Arduino |
 | Sin red, timeout o 5xx | Conserva todo y reintenta con espera creciente: 5 s, 10 s, 20 s… hasta 5 min |
 | 401 / 403 | Conserva todo y lo dice claro en el log: revisa `SG_API_KEY` |
 | 404 | Conserva todo y lo dice claro: revisa `SG_DEVICE_ID` y `SG_API_URL` |
@@ -56,12 +67,23 @@ Se corren desde la **carpeta raíz del repo** (la que contiene `gateway/`):
 | Comando | Qué hace |
 |---|---|
 | `python -m gateway run` | Lee el Arduino real y envía. Es lo que corre el servicio de la Pi |
-| `python -m gateway status` | Pendientes, enviadas, rechazadas, reloj, último envío y último error |
+| `python -m gateway status` | Pendientes, enviadas, rechazadas, reloj, último envío, última orden al Arduino y último error |
 | `python -m gateway simulate` | Igual que `run`, pero con un Arduino simulado (para probar sin hardware) |
 | `python -m gateway simulate --print` | Solo imprime líneas simuladas, como el Monitor Serie |
 
-`simulate` acepta `--interval 0.5` (más rápido) y `--fallas` (el DHT11 simulado
-manda `null` de vez en cuando).
+`simulate` acepta:
+
+- `--interval 0.5`: más rápido. Cada lectura sigue valiendo 2 s del Arduino,
+  así que es un time-lapse (x4): los riegos y el descanso también van x4.
+- `--fallas`: el DHT11 simulado manda `null` de vez en cuando.
+- `--seco`: la tierra arranca en el límite y a los pocos segundos el Arduino
+  simulado riega solo (para ver ACT-02).
+- `--firmware-actual`: simula el firmware de antes de ACT-02 (riega solo con
+  la regla vieja, no acepta órdenes y no manda `modo`).
+
+El Arduino simulado se comporta como el firmware: modo AUTO/MANUAL, objetivo
+50 %, mínimo 10 s y máximo 60 s por riego automático, descanso de 5 min y las
+órdenes `SG,...` (con las mismas reglas para líneas raras).
 
 ## Configuración (`gateway/.env`)
 
@@ -159,12 +181,14 @@ para la prueba de punta a punta):
 python -m pytest gateway\tests -q
 ```
 
-64 pruebas: lector Serial (17), reloj (11), buffer (10), configuración (11),
-envío (12) y 3 de punta a punta contra el **backend real** (uvicorn en un
-subproceso): lecturas que llegan a `/readings/latest`, backend apagado y
-prendido con las horas originales, y reloj sin sincronizar que no manda nada
-hasta que "llega" NTP. Si el venv no tiene FastAPI, las de punta a punta se
-saltan.
+109 pruebas: lector Serial (17), reloj (11), buffer (10), configuración (11),
+envío (12), órdenes al Arduino y simulador (43) y 5 de punta a punta contra
+el **backend real** (uvicorn en un subproceso): lecturas que llegan a
+`/readings/latest`, backend apagado y prendido con las horas originales, reloj
+sin sincronizar que no manda nada hasta que "llega" NTP, la cadena completa
+de ACT-02 (riego automático registrado, cambio a manual confirmado por el
+Arduino, Regar y Detener) y el firmware de antes sin órdenes. Si el venv no
+tiene FastAPI, las de punta a punta se saltan.
 
 ## Archivos
 
@@ -176,7 +200,9 @@ gateway/
 ├── clock.py          NTP (timedatectl) y hora de lecturas sin hora
 ├── buffer.py         cola SQLite: sin_hora / pendiente / enviada / rechazada
 ├── sender.py         envío HTTP por lotes, reintentos y respuestas
+├── protocol.py       órdenes al Arduino: formato y validación (ACT-02)
 ├── simulator.py      Arduino simulado (mismas reglas que el firmware)
+├── PROTOCOLO_ARDUINO.md  protocolo Pi ↔ Arduino de ACT-02
 ├── requirements.txt  pyserial
 ├── .env.example      plantilla del .env
 └── tests/

@@ -84,7 +84,7 @@ async def test_same_instant_in_two_formats_is_duplicate(api, db):
     first = await post(api, reading("2026-09-20T18:00:00Z"))
     second = await post(api, reading("2026-09-20T12:00:00.000-06:00"))
     assert first["accepted"] == 1
-    assert second == {"accepted": 0, "duplicates": 1, "rejected": []}
+    assert second == {"accepted": 0, "duplicates": 1, "rejected": [], "commands": []}
     assert len(await stored_ts(db)) == 1
 
 
