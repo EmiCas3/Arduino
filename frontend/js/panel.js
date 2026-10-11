@@ -2,7 +2,8 @@
  * Panel principal: shell con menú por rol (AUTH-02) y pantallas de inicio.
  *
  * Secciones (roles.js):
- *   #/inicio         todos           lecturas en vivo (DASH-01) y estado de los equipos (ACT-04)
+ *   #/inicio         todos           lecturas en vivo (DASH-01), alertas (ALERT-01) y
+ *                                    estado de los equipos (ACT-04)
  *   #/configuracion  admin, super    actuadores registrados (CONF-05)
  *   #/plataforma     super           permisos por rol y módulos próximos
  *
@@ -10,6 +11,7 @@
  * servidor: si una llamada responde 403 se muestra el aviso y nada más.
  */
 import { apiFetch, ApiError } from "./api.js";
+import { mountAlerts } from "./alerts.js";
 import { mountLiveReadings } from "./dashboard.js";
 import { mountEquipment } from "./equipment.js";
 import { clearSession, loadSession, setFlash } from "./session.js";
@@ -197,14 +199,16 @@ function renderInicio() {
   const equipmentBody = h("div", {}, loadingLines());
   const picker = h("div", { class: "greenhouse-picker" });
   const liveBody = h("div", { class: "live" }, loadingLines());
+  const alertsBody = h("div", { class: "alerts" }, loadingLines(2));
+  const alertsCount = h("div", { class: "alerts-count" });
 
   view.replaceChildren(
     pageHead({
       eyebrow: today(),
       title: `Hola, ${firstName(user)}`,
       text: greenhouse
-        ? "Este es el resumen de tu vivero: sus lecturas en vivo y sus equipos."
-        : "Elige un vivero para ver sus lecturas en vivo y sus equipos.",
+        ? "Este es el resumen de tu vivero: sus lecturas en vivo, sus alertas y sus equipos."
+        : "Elige un vivero para ver sus lecturas en vivo, sus alertas y sus equipos.",
       meta: [
         rolePill(user.role),
         greenhouse
@@ -220,6 +224,10 @@ function renderInicio() {
             h("p", {}, "El último valor de cada sensor, cuándo se midió y si está en rango.")),
           picker),
         liveBody),
+
+      h("section", { class: "card span-12", "aria-labelledby": "t-alertas" },
+        cardHead("Alertas", "Cuando el Arduino reporta que una medición cruzó su límite. Aparecen solas, sin recargar.", alertsCount, "t-alertas"),
+        alertsBody),
 
       h("section", { class: "card span-7", "aria-labelledby": "t-equipos" },
         cardHead("Equipos del vivero", "Lo que el Arduino reporta de cada equipo. Se actualiza solo cada 15 s.", null, "t-equipos"),
@@ -238,20 +246,22 @@ function renderInicio() {
       ),
     ),
   );
-  startLiveReadings(liveBody, picker, equipmentBody);
+  startLiveReadings({ body: liveBody, picker, equipmentBody, alertsBody, alertsCount });
 }
 
 /**
- * Arranca los widgets en vivo (DASH-01, ACT-04) en el vivero del usuario, o
- * en el que elija un admin. Todos se detienen juntos al salir de la vista.
+ * Arranca los widgets en vivo (DASH-01, ALERT-01, ACT-04) en el vivero del
+ * usuario, o en el que elija un admin. Todos se detienen juntos al salir de
+ * la vista o al cambiar de vivero.
  */
-async function startLiveReadings(body, picker, equipmentBody) {
+async function startLiveReadings({ body, picker, equipmentBody, alertsBody, alertsCount }) {
   const token = state.viewToken;
   const show = (greenhouseId) => {
     if (state.cleanup) state.cleanup();
     state.greenhouse = greenhouseId;
     const stops = [
       mountLiveReadings(body, greenhouseId),
+      mountAlerts(alertsBody, greenhouseId, alertsCount),
       mountEquipment(equipmentBody, greenhouseId),
     ];
     state.cleanup = () => stops.forEach((stop) => stop());
@@ -270,6 +280,7 @@ async function startLiveReadings(body, picker, equipmentBody) {
     if (token === state.viewToken) {
       body.replaceChildren(errorNotice(error));
       equipmentBody.replaceChildren();
+      alertsBody.replaceChildren();
     }
     return;
   }
@@ -277,6 +288,7 @@ async function startLiveReadings(body, picker, equipmentBody) {
 
   if (!greenhouses.length) {
     equipmentBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay equipos que mostrar."));
+    alertsBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay alertas."));
     body.replaceChildren(h("div", { class: "empty" },
       h("strong", {}, state.user.role === "producer"
         ? "Tu usuario aún no tiene un vivero asignado."

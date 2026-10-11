@@ -1,13 +1,14 @@
 /**
- * Lógica de los widgets de DASH-01, sin DOM ni red: qué estado tiene cada
- * medición y cómo se escribe. Al no tocar el navegador se puede probar con
- * `node --test frontend/tests`.
+ * Lógica de los widgets de "Mi vivero", sin DOM ni red: qué estado tiene cada
+ * medición (DASH-01), cada equipo (ACT-04) y cada alerta (ALERT-01), y cómo se
+ * escribe. Al no tocar el navegador se puede probar con
+ * `node --test frontend/tests/metrics.test.mjs`.
  *
- * De dónde sale el estado de cada tarjeta (decisión D1 del plan):
- * de las `alertas` que el Arduino manda en cada lectura, con la severidad que
- * les da el firmware (AVISO o ALERTA). Aquí NO se comparan valores contra
- * umbrales: si el firmware cambia un umbral, el dashboard lo refleja solo.
- * Cuando existan CONF-06 y ALERT-01, el estado vendrá evaluado del backend.
+ * De dónde sale el estado de cada tarjeta: de las `alertas` que el Arduino
+ * manda en cada lectura, con la severidad que les da el firmware (AVISO o
+ * ALERTA). Los umbrales viven en el firmware: aquí NO se comparan valores, y
+ * si el firmware cambia un umbral, el dashboard lo refleja solo. Las alertas
+ * con historia (ALERT-01) las crea el backend con esos mismos códigos.
  */
 
 /** Segundos entre refrescos automáticos del dashboard. */
@@ -216,4 +217,83 @@ export function powerView(item, elapsed = 0, staleAfter = Infinity) {
     note = `Confirmado ${formatAge(age)}`;
   }
   return { state, label: POWER_LABELS[state], note, age };
+}
+
+// ── Alertas (ALERT-01) ────────────────────────────────────────────────
+
+/** Valor con su unidad, con los decimales de la tarjeta: "31.2 °C", "20 %". */
+export function formatMeasure(metricKey, value, unit = "") {
+  if (value === null || value === undefined) return "—";
+  const look = METRICS[metricKey];
+  const text = formatValue({ key: metricKey, value });
+  return `${text} ${look ? look.unit : unit}`.trim();
+}
+
+/** "45 s", "18 min", "2 h 5 min", "3 d". */
+export function formatDuration(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  if (s < 60) return `${s} s`;
+  const minutes = Math.floor(s / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  return `${Math.floor(hours / 24)} d`;
+}
+
+/** Título de una alerta: el mismo texto que usa la tarjeta para ese código. */
+export function alertTitle(alert) {
+  return ALERTS[alert.code]?.text || `${alert.label || alert.metric}: fuera de límite`;
+}
+
+/**
+ * Textos de una alerta de /alerts, listos para dibujar:
+ *   value   "31.2 °C (límite 30.0 °C)"
+ *   since   "desde las 14:02 · hace 3 min" (activa) o "se normalizó a las 14:20 · duró 18 min"
+ *   extra   "ahora 31.0 °C · peor 31.6 °C" (solo activas, si cambió)
+ * `elapsed` son los segundos desde que llegó la respuesta; `clock` formatea horas.
+ */
+export function describeAlert(alert, elapsed = 0, clock = (iso) => iso) {
+  const measure = (value) => formatMeasure(alert.metric, value, alert.unit);
+  const value = `${measure(alert.value)} (límite ${measure(alert.threshold)})`;
+  if (alert.status === "cleared") {
+    return {
+      value,
+      since: `se normalizó a las ${clock(alert.cleared_ts)} · duró ${formatDuration(alert.duration_seconds)}`,
+      extra: "",
+    };
+  }
+  const extras = [];
+  if (alert.last_value !== alert.value) extras.push(`ahora ${measure(alert.last_value)}`);
+  if (alert.worst_value !== alert.value && alert.worst_value !== alert.last_value) {
+    extras.push(`peor ${measure(alert.worst_value)}`);
+  }
+  return {
+    value,
+    since: `desde las ${clock(alert.reading_ts)} · ${formatAge(alert.duration_seconds + elapsed)}`,
+    extra: extras.join(" · "),
+  };
+}
+
+/** Alertas activas que no estaban en `knownIds` (para avisar de las nuevas). */
+export function newActiveAlerts(knownIds, alerts = []) {
+  return alerts.filter((alert) => alert.status === "active" && !knownIds.has(alert.id));
+}
+
+/**
+ * Qué se muestra en la tarjeta: todas las activas y hasta `maxCleared`
+ * cerradas en las últimas `recentHours` horas (las más recientes primero).
+ */
+export function visibleAlerts(alerts = [], { maxCleared = 5, recentHours = 24, now = Date.now() } = {}) {
+  const active = alerts.filter((alert) => alert.status === "active");
+  const since = now - recentHours * 3600 * 1000;
+  const cleared = alerts
+    .filter((alert) => alert.status === "cleared" && Date.parse(alert.cleared_ts) >= since)
+    .slice(0, maxCleared);
+  return { active, cleared };
+}
+
+/** Título de la pestaña con el número de alertas activas: "(2) Mi vivero · …". */
+export function titleWithCount(title, count) {
+  const base = String(title || "").replace(/^\(\d+\)\s+/, "");
+  return count > 0 ? `(${count}) ${base}` : base;
 }

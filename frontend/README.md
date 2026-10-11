@@ -2,7 +2,8 @@
 
 Interfaz web del vivero de rábano. Hoy cubre **AUTH-01** (login), la parte
 de UI de **AUTH-02** (menú por rol), los widgets de lecturas en vivo de
-**DASH-01**, los actuadores de **CONF-05** y su estado en vivo (**ACT-04**).
+**DASH-01**, las alertas de **ALERT-01**, los actuadores de **CONF-05** y su
+estado en vivo (**ACT-04**).
 
 Es **HTML + CSS + JavaScript sin framework ni paso de build** (decisión D1 = A
 del plan del Sprint 2). FastAPI sirve esta carpeta desde el mismo origen que
@@ -35,6 +36,7 @@ frontend/
 │   ├── panel.js      → vistas: Mi vivero, Configuración, Plataforma
 │   ├── dashboard.js  → DASH-01: tarjetas en vivo, refresco cada 15 s
 │   ├── metrics.js    → estados y textos de los widgets (lógica pura, sin DOM)
+│   ├── alerts.js     → ALERT-01: tarjeta "Alertas", avisos flotantes y contador
 │   ├── equipment.js  → ACT-04: "Equipos del vivero" con su estado en vivo
 │   ├── poller.js     → refresco cada 15 s compartido por los widgets nuevos
 │   ├── theme.js      → tema claro/oscuro
@@ -104,6 +106,25 @@ Se muestra uno solo, en ese orden de prioridad. Un `null` nunca se pinta como 0.
 - **Administradores:** no tienen vivero asignado; eligen uno de
   `GET /greenhouses` (con un solo vivero se elige solo).
 
+## Alertas (ALERT-01)
+
+La tarjeta "Alertas" de "Mi vivero" (`alerts.js`) muestra las alertas que
+crea el backend cuando el Arduino reporta que una medición cruzó su límite
+(`GET /greenhouses/{id}/alerts`):
+
+- **Activas:** título (el mismo texto de la tarjeta del sensor), valor y
+  límite del firmware ("31.2 °C (límite 30.0 °C)"), desde cuándo, y el valor
+  actual y el peor si cambiaron.
+- **Se normalizaron:** hasta 5 de las últimas 24 h, atenuadas, con cuánto
+  duraron.
+- **Sin recargar:** se refresca cada 15 s (`poller.js`). Una alerta nueva
+  aparece sola, con un aviso flotante (`aria-live`, se cierra solo a los
+  10 s) y el número de activas en el título de la pestaña:
+  "(1) Mi vivero · SmartGreenAI". En la primera carga no se avisa: solo de
+  las que llegan después.
+- Los umbrales viven en el firmware: el número del límite llega de la API,
+  no hay umbrales en JavaScript.
+
 ## Estado de los equipos (ACT-04)
 
 "Equipos del vivero" muestra cada actuador activo con su estado, de
@@ -160,7 +181,7 @@ empezado con React + Vite.
 | Item | Qué hacer en el frontend | Costo extra vs React |
 |---|---|---|
 | DASH-01 widgets | ✅ Hecho: `dashboard.js` + `metrics.js` (ver "Widgets de Estado actual"). | ~1 h (el polling y la limpieza del intervalo son manuales) |
-| ALERT-01 UI | Lista de alertas y contador en el menú. Crear `js/store.js` (ver abajo) para compartir las alertas entre el menú y la vista sin recargar. Puede reutilizar el refresco de `dashboard.js`. | ~1 h |
+| ALERT-01 UI | ✅ Hecho: `alerts.js` (ver "Alertas"). El contador va en la tarjeta y en el título de la pestaña; ponerlo también en el menú lateral necesitará `js/store.js` (ver abajo). | ~1 h |
 | ACT-04 | ✅ Hecho: `equipment.js` + `poller.js` (ver "Estado de los equipos"). | ~0.5 h |
 
 ### Sprint 3 (historia y AI)

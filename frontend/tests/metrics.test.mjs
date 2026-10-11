@@ -17,7 +17,14 @@ const {
   ALERTS,
   METRICS,
   POWER_LABELS,
+  alertTitle,
   alertsFor,
+  describeAlert,
+  formatDuration,
+  formatMeasure,
+  newActiveAlerts,
+  titleWithCount,
+  visibleAlerts,
   formatAge,
   formatValue,
   metricState,
@@ -207,4 +214,69 @@ test("desconocido sin gateway o de un tipo que no se reporta muestra el motivo",
 
 test("un estado que la página no conoce se muestra como desconocido", () => {
   assert.equal(powerView(actuator({ state: "rompiendose" }), 0, 120).state, "unknown");
+});
+
+// ── Alertas (ALERT-01) ─────────────────────────────────────────────────
+
+const alertRow = (overrides = {}) => ({
+  id: 7, code: "TEMP_ALTA", metric: "temp_c", label: "Temperatura del aire", unit: "°C",
+  value: 31.2, threshold: 30, last_value: 31.2, worst_value: 31.2, status: "active",
+  reading_ts: "2026-10-10T20:02:00Z", cleared_ts: null, duration_seconds: 180,
+  ...overrides,
+});
+const clock = (iso) => iso.slice(11, 16);
+
+test("una alerta activa dice valor, límite, desde cuándo y cómo va", () => {
+  const text = describeAlert(alertRow({ last_value: 31, worst_value: 31.6 }), 5, clock);
+  assert.equal(text.value, "31.2 °C (límite 30.0 °C)");
+  assert.equal(text.since, "desde las 20:02 · hace 3 min");
+  assert.equal(text.extra, "ahora 31.0 °C · peor 31.6 °C");
+  assert.equal(describeAlert(alertRow(), 0, clock).extra, "");
+});
+
+test("una alerta cerrada dice cuándo se normalizó y cuánto duró", () => {
+  const text = describeAlert(alertRow({ status: "cleared", cleared_ts: "2026-10-10T20:20:00Z", duration_seconds: 1080 }), 0, clock);
+  assert.equal(text.since, "se normalizó a las 20:20 · duró 18 min");
+});
+
+test("los porcentajes se escriben sin decimales y con su unidad", () => {
+  assert.equal(formatMeasure("nivel_pct", 20), "20 %");
+  assert.equal(formatMeasure("hum_aire_pct", 90), "90 % HR");
+  assert.equal(formatMeasure("temp_c", null), "—");
+});
+
+test("el título de la alerta es el mismo texto que la tarjeta", () => {
+  assert.equal(alertTitle(alertRow()), ALERTS.TEMP_ALTA.text);
+  assert.equal(alertTitle(alertRow({ code: "CODIGO_NUEVO" })), "Temperatura del aire: fuera de límite");
+});
+
+test("solo se avisa de las activas que no se habían visto", () => {
+  const known = new Set([1]);
+  const fresh = [alertRow({ id: 1 }), alertRow({ id: 2 }), alertRow({ id: 3, status: "cleared" })];
+  assert.deepEqual(newActiveAlerts(known, fresh).map((a) => a.id), [2]);
+});
+
+test("la tarjeta muestra todas las activas y solo cerradas recientes", () => {
+  const now = Date.parse("2026-10-10T21:00:00Z");
+  const alerts = [
+    alertRow({ id: 1 }),
+    ...[2, 3, 4, 5, 6, 7].map((id) => alertRow({ id, status: "cleared", cleared_ts: "2026-10-10T20:00:00Z" })),
+    alertRow({ id: 8, status: "cleared", cleared_ts: "2026-10-08T20:00:00Z" }),
+  ];
+  const { active, cleared } = visibleAlerts(alerts, { now });
+  assert.deepEqual(active.map((a) => a.id), [1]);
+  assert.deepEqual(cleared.map((a) => a.id), [2, 3, 4, 5, 6]);
+});
+
+test("el título de la pestaña lleva el número de alertas activas", () => {
+  assert.equal(titleWithCount("Mi vivero · SmartGreenAI", 2), "(2) Mi vivero · SmartGreenAI");
+  assert.equal(titleWithCount("(2) Mi vivero · SmartGreenAI", 0), "Mi vivero · SmartGreenAI");
+  assert.equal(titleWithCount("(2) Mi vivero · SmartGreenAI", 3), "(3) Mi vivero · SmartGreenAI");
+});
+
+test("duraciones legibles", () => {
+  assert.equal(formatDuration(45), "45 s");
+  assert.equal(formatDuration(1080), "18 min");
+  assert.equal(formatDuration(7500), "2 h 5 min");
+  assert.equal(formatDuration(3 * 86400), "3 d");
 });

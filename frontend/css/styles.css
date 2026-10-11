@@ -1003,6 +1003,119 @@ code, .mono {
 .equip-icon.type-light { background: var(--warn-soft); color: var(--warn); }
 .equip-icon.type-shade { background: var(--surface-3); color: var(--ink-2); }
 
+/* ── Alertas (ALERT-01) ─────────────────────────────────────────────── */
+
+.alerts { display: grid; gap: 12px; }
+.alert-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.alert-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--crit) 22%, var(--line));
+  border-left: 4px solid var(--crit);
+  border-radius: var(--radius-m);
+  background: color-mix(in srgb, var(--crit-soft) 45%, var(--surface));
+}
+.alert-item[data-status="cleared"] {
+  border-color: var(--line);
+  border-left-color: var(--line-strong);
+  background: var(--surface-2);
+}
+.alert-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--crit-soft);
+  color: var(--crit);
+}
+.alert-icon .icon { width: 18px; height: 18px; }
+.alert-item[data-status="cleared"] .alert-icon { background: var(--leaf-soft); color: var(--leaf-strong); }
+.alert-main { display: grid; gap: 3px; min-width: 0; }
+.alert-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-weight: 700;
+  color: var(--crit);
+}
+.alert-item[data-status="cleared"] .alert-title { color: var(--ink-2); font-weight: 600; }
+.alert-sensor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.alert-value {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.alert-meta { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.alert-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-m);
+  background: var(--leaf-soft);
+  color: var(--leaf-strong);
+  font-size: var(--step--1);
+}
+.alert-empty strong { color: inherit; }
+.alert-cleared { display: grid; gap: 8px; }
+.alert-cleared:empty { display: none; }
+.alert-cleared-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.alerts-count:empty { display: none; }
+
+/* Avisos flotantes: una alerta nueva llega sin recargar la página. */
+.toasts {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+}
+.toasts:empty { display: none; }
+.toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 12px 10px 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--crit);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  animation: toast-in 0.25s ease-out;
+}
+.toast-icon { color: var(--crit); padding-top: 1px; }
+.toast-body { display: grid; gap: 2px; min-width: 0; font-size: var(--step--1); }
+.toast-body strong { color: var(--ink); }
+.toast-body span { font-family: var(--font-mono); color: var(--muted); }
+.toast-close { width: 30px; height: 30px; }
+@keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
+@media (max-width: 560px) {
+  .toasts { right: 16px; left: 16px; bottom: 16px; width: auto; }
+}
+
 /* Estado de los equipos (ACT-04). Se comunica con color, ícono Y texto.
    "Desconocido" va sin relleno y con borde punteado: nunca parece apagado. */
 .equip-row {
