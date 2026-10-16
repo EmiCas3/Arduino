@@ -22,8 +22,18 @@ export const RANGES = [
 
 export const DEFAULT_RANGE = "24h";
 
-/** Cada cuánto se vuelven a pedir los datos del histórico. */
-export const HISTORY_REFRESH_SECONDS = 60;
+/**
+ * Cada cuánto se vuelven a pedir los datos del histórico, según el rango.
+ *
+ * Un rango largo cambia poco en un minuto y cuesta mucho: 30 días son ~1.3 M
+ * lecturas que SQLite tiene que agrupar (~1–1.5 s por consulta en una laptop,
+ * más en la Pi) con la única conexión a la BD, la misma que usa la ingesta.
+ */
+const REFRESH_BY_RANGE = { "6h": 60, "24h": 60, "7d": 5 * 60, "30d": 15 * 60 };
+
+export function refreshSeconds(rangeId) {
+  return REFRESH_BY_RANGE[rangeById(rangeId).id] ?? 60;
+}
 
 export function rangeById(id) {
   return RANGES.find((range) => range.id === id) || RANGES.find((range) => range.id === DEFAULT_RANGE);
@@ -99,18 +109,44 @@ const TIME_STEPS = [
   12 * 3600, 86400, 2 * 86400, 7 * 86400,
 ].map((seconds) => seconds * 1000);
 
-/** Marcas del eje de tiempo (ms), alineadas al reloj. */
+const HOUR_MS = 3600 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * Marcas del eje de tiempo (ms), alineadas al reloj de QUIEN MIRA.
+ *
+ * - Pasos de minutos: alineados a la época; caen en minutos exactos en
+ *   cualquier zona de hora o media hora completa.
+ * - Pasos de 1 h a 12 h: contados desde la medianoche local, así un paso de
+ *   6 h cae a las 00, 06, 12 y 18 de aquí aunque la zona no sea múltiplo de
+ *   6 h.
+ * - Pasos de días: en la medianoche local. (Antes se alineaban a la
+ *   medianoche UTC: en México la raya de "13 oct" caía el 12 a las 6 p.m.)
+ */
 export function timeTicks(fromMs, toMs, count = 5) {
   if (!(toMs > fromMs)) return [];
   const rough = (toMs - fromMs) / Math.max(1, count);
   const step = TIME_STEPS.find((candidate) => candidate >= rough) ?? TIME_STEPS[TIME_STEPS.length - 1];
   const ticks = [];
-  // Alineado a la época UTC: con pasos de hora o menos cae en minutos exactos
-  // en cualquier zona (todas las zonas usadas en el proyecto son de hora o
-  // media hora completa).
-  for (let value = Math.ceil(fromMs / step) * step; value <= toMs; value += step) {
-    ticks.push(value);
+  if (step < HOUR_MS) {
+    for (let value = Math.ceil(fromMs / step) * step; value <= toMs; value += step) {
+      ticks.push(value);
+    }
+    return ticks;
   }
+
+  const cursor = new Date(fromMs);
+  cursor.setHours(0, 0, 0, 0);                  // medianoche local del primer día
+  const advance = step < DAY_MS
+    ? () => cursor.setHours(cursor.getHours() + step / HOUR_MS)
+    : () => cursor.setDate(cursor.getDate() + step / DAY_MS);
+  // Se busca la primera marca dentro del rango (las horas, de paso en paso
+  // desde la medianoche; los días, de uno en uno) y desde ahí se avanza.
+  while (cursor.getTime() < fromMs) {
+    if (step < DAY_MS) advance();
+    else cursor.setDate(cursor.getDate() + 1);
+  }
+  for (; cursor.getTime() <= toMs; advance()) ticks.push(cursor.getTime());
   return ticks;
 }
 
@@ -129,6 +165,16 @@ export function formatTimeTick(ms, spanMs) {
 export function formatStamp(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : stampFormat.format(date);
+}
+
+/**
+ * Momento (ms) en el que se dibuja un punto. Un punto promediado representa
+ * todo su bucket: se pone al CENTRO del bucket, no al inicio (si no, la línea
+ * queda medio bucket a la izquierda de donde pasó).
+ */
+export function pointTime(point, bucketSeconds = 0) {
+  const start = Date.parse(point.ts);
+  return bucketSeconds > 0 ? start + (bucketSeconds * 1000) / 2 : start;
 }
 
 // ── Cortes en los huecos ──────────────────────────────────────────────
@@ -244,8 +290,9 @@ export function describeTrend(variable) {
 
   let change = "";
   if (variable.trend !== "insufficient_data" && Number.isFinite(variable.change)) {
-    const sign = variable.change > 0 ? "+" : "";
-    const amount = `${sign}${variable.change.toFixed(decimals)} ${unit}`.trim();
+    const amount = `${formatChange(variable.change, {
+      decimals, band: variable.stable_band, trend: variable.trend,
+    })} ${unit}`.trim();
     change = `${amount} en ${formatDuration((variable.observed_hours || 0) * 3600)}`;
   }
 
@@ -269,6 +316,25 @@ export function describeTrend(variable) {
     quality: quality.join(" · "),
     value: Number.isFinite(variable.last) ? `${variable.last.toFixed(decimals)} ${unit}`.trim() : "—",
   };
+}
+
+/**
+ * El cambio del periodo con signo y con los decimales de la medición, salvo
+ * que el redondeo contradiga el indicador: con humedad (sin decimales) y una
+ * banda estable de 2, un cambio de 1.6 ("Estable") y uno de 2.4 ("Subiendo")
+ * saldrían los dos como "+2 %". En ese caso se agrega un decimal (hasta dos).
+ * Nunca escribe "-0.0".
+ */
+export function formatChange(change, { decimals = 1, band = null, trend = "stable" } = {}) {
+  const contradicts = (shown) => {
+    if (!Number.isFinite(band)) return false;
+    return trend === "stable" ? Math.abs(shown) >= band : Math.abs(shown) <= band;
+  };
+  let places = decimals;
+  while (places < decimals + 2 && contradicts(Number(change.toFixed(places)))) places += 1;
+  const text = change.toFixed(places);
+  if (Number(text) === 0) return text.replace("-", "");
+  return Number(text) > 0 ? `+${text}` : text;
 }
 
 /** Duración de un periodo en el lenguaje de los botones: "6 h", "7 días". */

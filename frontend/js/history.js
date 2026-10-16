@@ -14,19 +14,20 @@
  *
  * El refresco es el mismo patrón del resto del panel (poller.js): solo con la
  * pestaña visible, y un refresco automático no renueva la sesión (AUTH-01).
- * Aquí es cada 60 s y no cada 15: un histórico de horas o días no cambia tan
- * rápido.
+ * Aquí es más lento que los 15 s de "Mi vivero" y depende del rango
+ * (refreshSeconds): 60 s en 6 h y 24 h, 5 min en 7 días y 15 min en 30 días.
+ * Un histórico largo cambia poco y cuesta mucho agruparlo en la Pi.
  */
 import { apiFetch } from "./api.js";
 import { createChart } from "./chart.js";
 import { createPoller } from "./poller.js";
 import {
   DEFAULT_RANGE,
-  HISTORY_REFRESH_SECONDS,
   RANGES,
   describePeriod,
   describeTrend,
   rangeStart,
+  refreshSeconds,
   resolutionNote,
 } from "./series.js";
 import { METRICS } from "./metrics.js";
@@ -82,6 +83,7 @@ export function mountHistory(root, greenhouseId) {
         button.setAttribute("aria-pressed", "false");
       }
       event.currentTarget.setAttribute("aria-pressed", "true");
+      poller.setSeconds(refreshSeconds(state.range));
       poller.now();
     },
   }, range.label)));
@@ -197,7 +199,7 @@ export function mountHistory(root, greenhouseId) {
     paintTrends();
   }
 
-  const poller = createPoller({ seconds: HISTORY_REFRESH_SECONDS, run: load });
+  const poller = createPoller({ seconds: refreshSeconds(state.range), run: load });
   poller.now();    // la primera carga sí cuenta como actividad de la persona
   return () => poller.stop();
 }

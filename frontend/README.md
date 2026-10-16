@@ -195,16 +195,27 @@ La sección "Historial" (`history.js`) tiene dos tarjetas:
 - **Accesible:** el SVG es una imagen con su descripción y el pie dice en
   texto el punto señalado. Con el mouse o con las flechas ←/→ (y Inicio/Fin)
   se recorre la serie punto por punto.
+- **Un promedio se dibuja al centro de su bucket** (`pointTime()`): la API
+  manda el inicio del bucket, y dibujarlo ahí corría la línea medio bucket a
+  la izquierda.
+- **Las marcas del eje van en la hora de quien mira** (`timeTicks()`): las de
+  días caen en la medianoche local y las de horas se cuentan desde ella.
 
 **Tendencias del periodo** — de `GET /greenhouses/{id}/analysis`: por cada
 medición, si va subiendo, estable o bajando, con el cambio del periodo y la
 calidad del dato ("cobertura 89.6 % · 2 huecos · 2 h 30 min · 20 sin dato del
 sensor"). El periodo y el paso usados se muestran arriba, porque el indicador
 no significa nada sin ellos. La explicación en lenguaje natural es AI-05: aquí
-solo se muestran los números que devuelve el análisis.
+solo se muestran los números que devuelve el análisis. El cambio se escribe
+con los decimales de la medición, salvo que el redondeo contradiga el
+indicador (`formatChange()`): una humedad que cambió 1.6 ("Estable", banda
+de 2) sale "+1.6 % HR", no "+2 % HR" como una que sí sube.
 
-El refresco es cada 60 s (`poller.js`, mismas reglas de sesión y visibilidad
-que los widgets): un histórico de horas o días no cambia cada 15 s.
+El refresco depende del rango (`refreshSeconds()`): 60 s en 6 h y 24 h, 5 min
+en 7 días y 15 min en 30 días (`poller.js`, mismas reglas de sesión y
+visibilidad que los widgets; `poller.setSeconds()` lo cambia al elegir otro
+rango). Un histórico largo cambia poco y agruparlo cuesta: 30 días son ~1.3 M
+lecturas para SQLite, con la misma conexión que usa la ingesta de la Pi.
 
 ### Por qué la gráfica es SVG a mano y no uPlot
 

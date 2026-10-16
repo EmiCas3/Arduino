@@ -27,6 +27,7 @@ const {
   describePeriod,
   describeTrend,
   emptyNote,
+  formatChange,
   formatSpan,
   formatStamp,
   formatTimeTick,
@@ -34,9 +35,11 @@ const {
   formatWithUnit,
   medianStep,
   niceTicks,
+  pointTime,
   presentation,
   rangeById,
   rangeStart,
+  refreshSeconds,
   resolutionNote,
   splitSegments,
   timeTicks,
@@ -138,9 +141,54 @@ test("las marcas de tiempo caen en horas redondas", () => {
   const to = Date.UTC(2026, 9, 15, 12, 7, 30);
   const ticks = timeTicks(to - 24 * HOUR, to, 5);
   assert.ok(ticks.length >= 3 && ticks.length <= 8, `fueron ${ticks.length}`);
-  assert.ok(ticks.every((tick) => tick % (3600 * 1000) === 0), "no caen en hora en punto");
+  // En punto en la hora de quien mira (la de la máquina que corre la prueba).
+  assert.ok(ticks.every((tick) => {
+    const local = new Date(tick);
+    return local.getMinutes() === 0 && local.getSeconds() === 0 && local.getMilliseconds() === 0;
+  }), "no caen en hora en punto");
   const steps = ticks.slice(1).map((tick, i) => tick - ticks[i]);
   assert.equal(new Set(steps).size, 1, "el paso no es constante");
+});
+
+/** Corre `check` con la zona horaria `zone` y la regresa como estaba. */
+function inZone(zone, check) {
+  const before = process.env.TZ;
+  process.env.TZ = zone;
+  try {
+    check();
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+}
+
+test("en rangos de días, las marcas caen en la medianoche local (México)", () => {
+  inZone("America/Mexico_City", () => {
+    assert.equal(new Date(Date.UTC(2026, 9, 15, 6)).getHours(), 0, "Node no tomó la zona");
+    for (const days of [7, 30]) {
+      const to = Date.UTC(2026, 9, 15, 23, 7, 30);
+      const ticks = timeTicks(to - days * 24 * HOUR, to, 5);
+      assert.ok(ticks.length >= 3, `${days} días: ${ticks.length} marcas`);
+      for (const tick of ticks) {
+        const local = new Date(tick);
+        // Antes caían a la medianoche UTC: las 18:00 del día anterior aquí.
+        assert.equal(local.getHours(), 0, `${days} días: ${local.toString()}`);
+        assert.equal(local.getMinutes(), 0);
+      }
+    }
+  });
+});
+
+test("en rangos de horas, las marcas se cuentan desde la medianoche local", () => {
+  inZone("Asia/Kolkata", () => {                 // UTC+5:30
+    const to = Date.UTC(2026, 9, 15, 12, 7, 30);
+    const ticks = timeTicks(to - 24 * HOUR, to, 5);   // paso de 6 h
+    for (const tick of ticks) {
+      const local = new Date(tick);
+      assert.equal(local.getMinutes(), 0, local.toString());
+      assert.equal(local.getHours() % 6, 0, local.toString());
+    }
+  });
 });
 
 test("un rango invertido no tiene marcas de tiempo", () => {
@@ -234,6 +282,23 @@ test("un periodo sin datos se explica nombrando la medición", () => {
   assert.match(emptyNote(series({ metric: "nivel_pct" })), /nivel del tanque/);
 });
 
+test("un punto promediado se dibuja al centro de su bucket", () => {
+  const point = { ts: "2026-10-15T12:00:00Z" };
+  const start = Date.UTC(2026, 9, 15, 12, 0, 0);
+  assert.equal(pointTime(point, 600), start + 300 * 1000);
+  assert.equal(pointTime(point, 0), start);          // una lectura: en su hora
+  assert.equal(pointTime(point), start);
+});
+
+test("los rangos largos se refrescan más despacio", () => {
+  assert.equal(refreshSeconds("6h"), 60);
+  assert.equal(refreshSeconds("24h"), 60);
+  assert.equal(refreshSeconds("7d"), 300);
+  assert.equal(refreshSeconds("30d"), 900);
+  assert.equal(refreshSeconds("no-existe"), refreshSeconds(DEFAULT_RANGE));
+  for (const range of RANGES) assert.ok(refreshSeconds(range.id) >= 60, range.id);
+});
+
 // ── Tendencias (AI-01) ────────────────────────────────────────────────
 
 const variable = (overrides = {}) => ({
@@ -306,6 +371,27 @@ test("varios huecos se cuentan en plural y se suman", () => {
     ],
   }));
   assert.match(view.quality, /2 huecos · 30 min/);
+});
+
+test("el redondeo del cambio no contradice el indicador", () => {
+  // Humedad: sin decimales, banda estable de 2.
+  const humidity = { decimals: 0, band: 2 };
+  assert.equal(formatChange(1.6, { ...humidity, trend: "stable" }), "+1.6");
+  assert.equal(formatChange(2.4, { ...humidity, trend: "rising" }), "+2.4");
+  assert.equal(formatChange(1.2, { ...humidity, trend: "stable" }), "+1");
+  assert.equal(formatChange(6.4, { ...humidity, trend: "rising" }), "+6");
+  assert.equal(formatChange(-2.3, { ...humidity, trend: "falling" }), "-2.3");
+  // Nunca "-0.0".
+  assert.equal(formatChange(-0.04, { decimals: 1, band: 0.5, trend: "stable" }), "0.0");
+  assert.equal(formatChange(0, { decimals: 1, band: 0.5, trend: "stable" }), "0.0");
+});
+
+test("una humedad estable no se escribe igual que una que sube", () => {
+  const look = { key: "hum_aire_pct", unit: "% HR", stable_band: 2, observed_hours: 6 };
+  const stable = describeTrend(variable({ ...look, trend: "stable", change: 1.6 }));
+  const rising = describeTrend(variable({ ...look, trend: "rising", change: 2.4 }));
+  assert.notEqual(stable.change, rising.change);
+  assert.match(stable.change, /^\+1\.6 % HR en 6 h$/);
 });
 
 test("el periodo del análisis queda a la vista", () => {

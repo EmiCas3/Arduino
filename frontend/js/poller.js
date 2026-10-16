@@ -13,6 +13,7 @@
  * Uso:
  *   const poller = createPoller({ seconds: 15, run: async ({ background }) => {…}, onTick: paint });
  *   poller.now();   // primera carga (cuenta como actividad)
+ *   poller.setSeconds(300);  // cambiar el intervalo (p. ej. al cambiar de rango)
  *   poller.stop();  // al salir de la vista
  */
 const ACTIVITY_EVENTS = ["pointerdown", "keydown", "touchstart"];
@@ -53,7 +54,8 @@ export function createPoller({ seconds, run, onTick = null, tickSeconds = 1 }) {
   const markActive = () => { interacted = true; };
   const onVisibility = () => { if (visible() && !halted) execute(true); };
 
-  let poll = setInterval(() => { if (visible()) execute(true); }, seconds * 1000);
+  const schedule = (every) => setInterval(() => { if (visible()) execute(true); }, every * 1000);
+  let poll = schedule(seconds);
   const tick = onTick ? setInterval(onTick, tickSeconds * 1000) : null;
   document.addEventListener("visibilitychange", onVisibility);
   for (const name of ACTIVITY_EVENTS) {
@@ -78,6 +80,13 @@ export function createPoller({ seconds, run, onTick = null, tickSeconds = 1 }) {
         if (Date.now() > fastUntil) stopFast();
         else if (visible()) execute(true);
       }, every * 1000);
+    },
+
+    /** Cambia cada cuánto se refresca (cuenta desde ahora). */
+    setSeconds(every) {
+      if (stopped || halted || !(every > 0)) return;
+      clearInterval(poll);
+      poll = schedule(every);
     },
 
     /** Deja de pedir datos pero conserva lo dibujado (errores permanentes). */

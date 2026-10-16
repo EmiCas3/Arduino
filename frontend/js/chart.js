@@ -27,6 +27,7 @@ import {
   formatValue,
   formatWithUnit,
   niceTicks,
+  pointTime,
   presentation,
   splitSegments,
   timeTicks,
@@ -82,7 +83,10 @@ export function createChart() {
   }
 
   function paint(series) {
-    const points = (series?.points || []).filter((point) => Number.isFinite(Number(point.value)));
+    // `at`: dónde se dibuja cada punto (el centro de su bucket si es promedio).
+    const points = (series?.points || [])
+      .filter((point) => Number.isFinite(Number(point.value)))
+      .map((point) => ({ ...point, at: pointTime(point, series.bucket_seconds) }));
     if (!series?.has_data || !points.length) {
       clear(emptyNote(series), "empty");
       return;
@@ -121,7 +125,7 @@ export function createChart() {
         const [only] = segment;
         nodes.push(svg("circle", {
           class: "chart-dot-lone",
-          cx: xOf(Date.parse(only.ts), fromMs, toMs).toFixed(2),
+          cx: xOf(only.at, fromMs, toMs).toFixed(2),
           cy: yOf(only.value, domain).toFixed(2),
           r: 2.5,
         }));
@@ -157,7 +161,7 @@ export function createChart() {
     const { points, domain, fromMs, toMs, series, look } = state;
     cursor = Math.max(0, Math.min(points.length - 1, index));
     const point = points[cursor];
-    const x = xOf(Date.parse(point.ts), fromMs, toMs).toFixed(2);
+    const x = xOf(point.at, fromMs, toMs).toFixed(2);
 
     if (rule) {
       rule.setAttribute("x1", x);
@@ -183,7 +187,7 @@ export function createChart() {
     let best = 0;
     let bestDistance = Infinity;
     for (let i = 0; i < points.length; i += 1) {
-      const distance = Math.abs(xOf(Date.parse(points[i].ts), fromMs, toMs) - canvasX);
+      const distance = Math.abs(xOf(points[i].at, fromMs, toMs) - canvasX);
       if (distance < bestDistance) {
         best = i;
         bestDistance = distance;
@@ -231,7 +235,7 @@ function yOf(value, [min, max]) {
 function linePath(points, domain, fromMs, toMs) {
   return points
     .map((point, index) => {
-      const x = xOf(Date.parse(point.ts), fromMs, toMs).toFixed(2);
+      const x = xOf(point.at, fromMs, toMs).toFixed(2);
       const y = yOf(point.value, domain).toFixed(2);
       return `${index === 0 ? "M" : "L"}${x} ${y}`;
     })
@@ -245,11 +249,11 @@ function bandPath(points, domain, fromMs, toMs) {
   );
   if (usable.length < 2) return null;
   const forward = usable.map((point, index) => {
-    const x = xOf(Date.parse(point.ts), fromMs, toMs).toFixed(2);
+    const x = xOf(point.at, fromMs, toMs).toFixed(2);
     return `${index === 0 ? "M" : "L"}${x} ${yOf(point.max, domain).toFixed(2)}`;
   });
   const back = [...usable].reverse().map((point) => {
-    const x = xOf(Date.parse(point.ts), fromMs, toMs).toFixed(2);
+    const x = xOf(point.at, fromMs, toMs).toFixed(2);
     return `L${x} ${yOf(point.min, domain).toFixed(2)}`;
   });
   return `${forward.join(" ")} ${back.join(" ")} Z`;
