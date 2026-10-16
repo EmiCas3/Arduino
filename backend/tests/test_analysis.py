@@ -139,6 +139,85 @@ def test_preprocessing_without_data_is_one_big_gap():
     assert result.gap_seconds == 3600
 
 
+def every_ten_seconds(start: datetime, end: datetime, bucket: int, value_at=lambda s: 20.0):
+    """Lecturas cada 10 s en [start, end), agrupadas como lo hace SQLite."""
+    grouped = {}
+    second = int(start.timestamp())
+    while second < end.timestamp():
+        grouped.setdefault(second // bucket * bucket, []).append(value_at(second))
+        second += 10
+    return [(epoch, sum(values) / len(values), len(values))
+            for epoch, values in sorted(grouped.items())]
+
+
+def test_preprocessing_keeps_the_newest_readings_when_the_range_is_not_aligned():
+    """Caso 5b (criterio 3): el rango casi nunca empieza en un bucket.
+
+    Con `from` a las 12:00:30 y buckets de 1 min, el último bucket (12:10) va
+    a medias y trae las lecturas más nuevas. Antes se quedaba fuera de la
+    rejilla: se tiraban sin contarlas como hueco ni como faltantes.
+    """
+    start = datetime(2026, 10, 15, 12, 0, 30, tzinfo=timezone.utc)
+    window = Window(start=start, end=start + timedelta(minutes=10))
+    buckets = every_ten_seconds(window.start, window.end, 60,
+                                value_at=lambda s: 20.0 + (s - start.timestamp()) / 60)
+
+    result = prepare(buckets, window, 60, readings_total=60, readings_valid=60)
+    assert result.readings_used == 60                  # todas, no 57
+    assert result.readings_missing == 0
+    assert result.gaps == ()
+    assert result.expected_samples == 11               # 12:00 … 12:10, dos a medias
+    assert result.samples[-1].epoch == int(datetime(
+        2026, 10, 15, 12, 10, tzinfo=timezone.utc).timestamp())
+
+    last = trend(result, stable_band=0.5, decimals=1).last
+    assert last == pytest.approx(29.7, abs=0.05)        # promedio de 12:10:00, :10 y :20
+
+
+def test_a_sensor_that_dies_at_the_end_leaves_a_gap_at_the_end():
+    """Caso 5c (criterio 3): si el sensor se cae en los últimos minutos, se dice."""
+    start = datetime(2026, 10, 15, 12, 0, 30, tzinfo=timezone.utc)
+    window = Window(start=start, end=start + timedelta(minutes=10))
+    dies = start + timedelta(minutes=7)
+    buckets = every_ten_seconds(window.start, dies, 60)
+
+    result = prepare(buckets, window, 60)
+    assert len(result.gaps) == 1
+    gap = result.gaps[0]
+    # El hueco termina donde termina el rango pedido, no en el borde del bucket.
+    assert gap.end_epoch == int(window.end.timestamp())
+    assert 120 <= gap.seconds <= 180
+
+
+def test_gaps_never_go_outside_the_requested_range():
+    """Caso 5d: sin datos, el hueco es exactamente el rango (no la rejilla)."""
+    start = datetime(2026, 10, 15, 12, 0, 30, tzinfo=timezone.utc)
+    window = Window(start=start, end=start + timedelta(minutes=10))
+
+    result = prepare([], window, 60)
+    assert len(result.gaps) == 1
+    assert result.gaps[0].start_epoch == int(window.start.timestamp())
+    assert result.gaps[0].end_epoch == int(window.end.timestamp())
+    assert result.gap_seconds == 600
+    assert result.gaps[0].buckets == 11
+
+
+@pytest.mark.parametrize("start, end, count", [
+    ("12:00:00", "13:00:00", 6),      # alineado: seis buckets de 10 min
+    ("12:00:30", "13:00:30", 7),      # corrido: el primero y el último a medias
+    ("12:00:00", "13:00:00.500", 7),  # `to` con fracción: cabe una lectura a las 13:00:00
+    ("12:05:00", "12:05:01", 1),      # un segundo: un bucket
+])
+def test_the_grid_covers_the_whole_range(start, end, count):
+    day = "2026-10-15T"
+    window = Window(start=datetime.fromisoformat(day + start + "+00:00"),
+                    end=datetime.fromisoformat(day + end + "+00:00"))
+    cells = history.grid(window, 600)
+    assert cells.count == count
+    assert cells.start_epoch <= window.start.timestamp()
+    assert cells.end_epoch >= window.end.timestamp()
+
+
 # ── Tendencia (task 2), en funciones puras ─────────────────────────────
 
 def line(count: int, first: float, rise: float, bucket: int = 600) -> Prepared:
@@ -262,6 +341,29 @@ async def test_the_analysis_returns_a_trend_per_variable_and_the_period(api, db,
     humidity = variable(data, "hum_aire_pct")
     assert humidity["trend"] == "stable"
     assert humidity["stable_band"] == metric_catalog.BY_KEY["hum_aire_pct"].stable_band
+
+
+@pytest.mark.asyncio
+async def test_the_newest_readings_count_in_the_default_range(api, db, tokens):
+    """Caso 14b (criterio 3): sin `from` ni `to` (como la página) el rango
+    empieza "ahora − 24 h", nunca justo en un bucket. Las lecturas de los
+    últimos minutos tienen que entrar, y el último valor tiene que ser el
+    último medido.
+    """
+    end = datetime.now(timezone.utc) - timedelta(seconds=5)
+    start = end - timedelta(hours=2)
+    rows = series(start, 720, 10, lambda i: 22.0)
+    for row in rows[-30:]:                       # los últimos 5 min: 35 °C
+        row["temp_c"] = 35.0
+    await insert_readings(db, rows)
+
+    data = (await api.get(ANALYSIS_URL, headers=bearer(tokens["producer"]))).json()
+    temp = variable(data, "temp_c")
+    assert data["readings"] == 720
+    assert temp["readings_used"] == 720
+    assert temp["readings_missing"] == 0
+    # El último bucket (con los 35 °C) sí entró: su promedio no baja de 28.5.
+    assert temp["last"] >= 28.0
 
 
 @pytest.mark.asyncio

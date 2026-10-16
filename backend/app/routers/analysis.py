@@ -106,7 +106,7 @@ async def analyze_greenhouse(
         history.choose_bucket(window.span_seconds, DEFAULT_ANALYSIS_POINTS)
         or history.MIN_BUCKET_SECONDS
     )
-    expected = history.bucket_count(window.span_seconds, bucket)
+    expected = history.grid(window, bucket).count
     if expected > history.MAX_MAX_POINTS:
         raise _invalid_range(
             f"Un bucket de {bucket} s parte ese rango en {expected} tramos; "

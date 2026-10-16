@@ -36,11 +36,12 @@ tuplas, probables con pytest sin levantar la app.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-from app.history import Window, bucket_count
+from app.history import Window, grid
 
 
 class TrendDirection(str, Enum):
@@ -153,9 +154,12 @@ def prepare(
     if bucket_seconds <= 0:
         raise ValueError("bucket_seconds debe ser mayor que 0")
 
-    grid_start = (window.start_epoch // bucket_seconds) * bucket_seconds
-    expected = bucket_count(window.span_seconds, bucket_seconds)
-    grid_end = grid_start + expected * bucket_seconds
+    # La rejilla cubre el rango COMPLETO, incluido el último bucket aunque
+    # esté a medias: ahí están las lecturas más nuevas. (Antes se calculaba
+    # desde el inicio del rango y, como el inicio casi nunca cae justo en un
+    # bucket, el último quedaba fuera sin avisar.)
+    cells = grid(window, bucket_seconds)
+    grid_start, grid_end, expected = cells.start_epoch, cells.end_epoch, cells.count
 
     samples: List[Sample] = []
     for epoch, value, count in buckets:
@@ -173,7 +177,11 @@ def prepare(
     return Prepared(
         bucket_seconds=bucket_seconds,
         samples=tuple(samples),
-        gaps=_find_gaps(samples, grid_start, grid_end, bucket_seconds),
+        gaps=_find_gaps(
+            samples, grid_start, grid_end, bucket_seconds,
+            low=math.floor(window.start.timestamp()),
+            high=math.ceil(window.end.timestamp()),
+        ),
         expected_samples=expected,
         readings_used=used,
         readings_missing=missing,
@@ -181,28 +189,38 @@ def prepare(
 
 
 def _find_gaps(
-    samples: Sequence[Sample], grid_start: int, grid_end: int, bucket: int
+    samples: Sequence[Sample], grid_start: int, grid_end: int, bucket: int,
+    low: int, high: int,
 ) -> Tuple[Gap, ...]:
     """Tramos seguidos de buckets vacíos dentro del rango.
 
     Cuentan también el tramo del principio y el del final: "no hay datos de
     las primeras tres horas de lo que pediste" es información, no un detalle.
     Sin ninguna muestra, el hueco es todo el rango.
+
+    Los buckets de las orillas pueden salirse del rango pedido (la rejilla va
+    alineada con la época), así que cada hueco se recorta a `[low, high)`: se
+    reporta el tiempo que de verdad faltó DENTRO del periodo. `buckets` sigue
+    siendo cuántos buckets quedaron vacíos.
     """
     if grid_end <= grid_start:
         return ()
-    if not samples:
-        return (Gap(grid_start, grid_end, (grid_end - grid_start) // bucket),)
 
-    gaps: List[Gap] = []
+    def gap(start: int, end: int) -> Optional[Gap]:
+        clipped_start, clipped_end = max(start, low), min(end, high)
+        if clipped_end <= clipped_start:
+            return None
+        return Gap(clipped_start, clipped_end, (end - start) // bucket)
+
+    edges: List[Tuple[int, int]] = []
     cursor = grid_start
     for sample in samples:
         if sample.epoch > cursor:
-            gaps.append(Gap(cursor, sample.epoch, (sample.epoch - cursor) // bucket))
+            edges.append((cursor, sample.epoch))
         cursor = sample.epoch + bucket
     if grid_end > cursor:
-        gaps.append(Gap(cursor, grid_end, (grid_end - cursor) // bucket))
-    return tuple(gaps)
+        edges.append((cursor, grid_end))
+    return tuple(found for found in (gap(start, end) for start, end in edges) if found)
 
 
 def trend(prepared: Prepared, stable_band: float, decimals: int = 1) -> Trend:

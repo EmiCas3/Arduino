@@ -138,11 +138,41 @@ def choose_bucket(
     return days * 86400
 
 
-def bucket_count(span_seconds: int, bucket_seconds: int) -> int:
-    """Cuántos buckets cubren el rango (los que el análisis espera llenar)."""
+@dataclass(frozen=True)
+class Grid:
+    """Los buckets (alineados con la época) que cubren TODA una ventana.
+
+    `start_epoch` es el inicio del bucket donde cae `from` y `end_epoch` el
+    final del bucket donde cae el último instante antes de `to`. Como `from`
+    casi nunca cae justo en un bucket, el primero y el último pueden quedar
+    a medias: se cuentan igual, porque ahí están las lecturas de las orillas
+    del rango (las más nuevas, en el último).
+    """
+
+    start_epoch: int
+    end_epoch: int
+    bucket_seconds: int
+
+    @property
+    def count(self) -> int:
+        return (self.end_epoch - self.start_epoch) // self.bucket_seconds
+
+
+def grid(window: Window, bucket_seconds: int) -> Grid:
+    """Rejilla de buckets de `bucket_seconds` que cubre la ventana completa.
+
+    Es la misma cuenta que hace SQLite al agrupar (`strftime('%s', ts) / b`):
+    una lectura en el segundo `s` cae en el bucket `⌊s / b⌋ · b`. La última
+    lectura posible es la del último segundo entero antes de `to` (`to` no se
+    incluye), así que el último bucket es el que contiene `⌈to⌉ − 1`.
+    """
     if bucket_seconds <= 0:
-        return 0
-    return max(1, math.ceil(max(1, span_seconds) / bucket_seconds))
+        raise ValueError("bucket_seconds debe ser mayor que 0")
+    first_second = math.floor(window.start.timestamp())
+    last_second = max(first_second, math.ceil(window.end.timestamp()) - 1)
+    start = (first_second // bucket_seconds) * bucket_seconds
+    end = (last_second // bucket_seconds + 1) * bucket_seconds
+    return Grid(start_epoch=start, end_epoch=end, bucket_seconds=bucket_seconds)
 
 
 def from_epoch(epoch: int) -> datetime:
