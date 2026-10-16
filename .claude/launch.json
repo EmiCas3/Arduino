@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "smartgreenai",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd '/Users/alexanderalcazar/Documents/Septimo semestre/agile/Arduino/backend' && .venv/bin/python -m uvicorn app.main:app --port 8010"
+      ],
+      "port": 8010
+    }
+  ]
+}
