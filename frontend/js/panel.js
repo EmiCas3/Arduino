@@ -4,6 +4,7 @@
  * Secciones (roles.js):
  *   #/inicio         todos           lecturas en vivo (DASH-01), alertas (ALERT-01) y
  *                                    estado de los equipos (ACT-04)
+ *   #/historial      todos           gráficas históricas (DASH-02) y tendencias (AI-01)
  *   #/configuracion  admin, super    actuadores registrados (CONF-05)
  *   #/plataforma     super           permisos por rol y módulos próximos
  *
@@ -14,6 +15,7 @@ import { apiFetch, ApiError } from "./api.js";
 import { mountAlerts } from "./alerts.js";
 import { mountLiveReadings } from "./dashboard.js";
 import { mountEquipment } from "./equipment.js";
+import { mountHistory } from "./history.js";
 import { clearSession, loadSession, setFlash } from "./session.js";
 import {
   ACTUATOR_TYPES,
@@ -254,20 +256,48 @@ function renderInicio() {
  * usuario, o en el que elija un admin. Todos se detienen juntos al salir de
  * la vista o al cambiar de vivero.
  */
-async function startLiveReadings({ body, picker, equipmentBody, alertsBody, alertsCount }) {
+function startLiveReadings({ body, picker, equipmentBody, alertsBody, alertsCount }) {
+  return withGreenhouse({
+    picker,
+    mount: (greenhouseId) => [
+      mountLiveReadings(body, greenhouseId),
+      mountAlerts(alertsBody, greenhouseId, alertsCount),
+      mountEquipment(equipmentBody, greenhouseId),
+    ],
+    onError: (error) => {
+      body.replaceChildren(errorNotice(error));
+      equipmentBody.replaceChildren();
+      alertsBody.replaceChildren();
+    },
+    onEmpty: () => {
+      equipmentBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay equipos que mostrar."));
+      alertsBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay alertas."));
+      body.replaceChildren(noGreenhouseNotice());
+    },
+  });
+}
+
+/**
+ * En qué vivero trabaja una vista y cómo se cambia de uno a otro.
+ *
+ * - Productor: su vivero asignado. El servidor lo vuelve a comprobar en cada
+ *   llamada (403 si no es suyo): el selector no es control de acceso.
+ * - Admin y super admin: los viveros con dispositivos registrados, con un
+ *   <select> si hay más de uno.
+ *
+ * `mount(greenhouseId)` devuelve las funciones que detienen lo que la vista
+ * dejó corriendo; se guardan en state.cleanup para que route() las llame al
+ * salir de la sección o al cambiar de vivero.
+ */
+async function withGreenhouse({ picker, mount, onError, onEmpty }) {
   const token = state.viewToken;
   const show = (greenhouseId) => {
     if (state.cleanup) state.cleanup();
     state.greenhouse = greenhouseId;
-    const stops = [
-      mountLiveReadings(body, greenhouseId),
-      mountAlerts(alertsBody, greenhouseId, alertsCount),
-      mountEquipment(equipmentBody, greenhouseId),
-    ];
+    const stops = [mount(greenhouseId)].flat().filter(Boolean);
     state.cleanup = () => stops.forEach((stop) => stop());
   };
 
-  // Productor: su vivero asignado. El servidor lo vuelve a comprobar (403 si no es suyo).
   if (state.user.greenhouse_id) {
     show(state.user.greenhouse_id);
     return;
@@ -277,25 +307,13 @@ async function startLiveReadings({ body, picker, equipmentBody, alertsBody, aler
   try {
     greenhouses = await apiFetch("/greenhouses");
   } catch (error) {
-    if (token === state.viewToken) {
-      body.replaceChildren(errorNotice(error));
-      equipmentBody.replaceChildren();
-      alertsBody.replaceChildren();
-    }
+    if (token === state.viewToken) onError(error);
     return;
   }
   if (token !== state.viewToken) return;   // ya se navegó a otra sección
 
   if (!greenhouses.length) {
-    equipmentBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay equipos que mostrar."));
-    alertsBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay alertas."));
-    body.replaceChildren(h("div", { class: "empty" },
-      h("strong", {}, state.user.role === "producer"
-        ? "Tu usuario aún no tiene un vivero asignado."
-        : "Aún no hay viveros con dispositivos registrados."),
-      state.user.role === "producer"
-        ? "Pídele a un Administrador que te asigne uno."
-        : "Cuando se registre un gateway, su vivero aparecerá aquí."));
+    onEmpty();
     return;
   }
 
@@ -312,6 +330,53 @@ async function startLiveReadings({ body, picker, equipmentBody, alertsBody, aler
     picker.replaceChildren(h("span", { class: "pill pill-plain" }, icon("sprout", "icon-sm"), selected));
   }
   show(selected);
+}
+
+/** Aviso de "todavía no hay un vivero que mirar", según el rol. */
+function noGreenhouseNotice() {
+  const producer = state.user.role === "producer";
+  return h("div", { class: "empty" },
+    h("strong", {}, producer
+      ? "Tu usuario aún no tiene un vivero asignado."
+      : "Aún no hay viveros con dispositivos registrados."),
+    producer
+      ? "Pídele a un Administrador que te asigne uno."
+      : "Cuando se registre un gateway, su vivero aparecerá aquí.");
+}
+
+// ── Vista: Historial (DASH-02 / AI-01) ────────────────────────────────
+
+function renderHistorial() {
+  const { user } = state;
+  const picker = h("div", { class: "greenhouse-picker" });
+  const body = h("div", {}, loadingLines(4));
+
+  view.replaceChildren(
+    pageHead({
+      eyebrow: "Historial",
+      title: "Cómo evolucionó el vivero",
+      text: "Las lecturas guardadas en el tiempo y lo que el análisis saca de ellas: qué sube, qué baja y con cuántos datos.",
+      meta: [
+        rolePill(user.role),
+        user.greenhouse_id
+          ? h("span", { class: "pill pill-plain" }, icon("sprout", "icon-sm"), user.greenhouse_id)
+          : picker,
+      ],
+    }),
+    body,
+  );
+  // Para un productor el vivero ya está en el encabezado; el selector solo
+  // hace falta cuando un admin puede elegir entre varios.
+  startHistory({ body, picker: user.greenhouse_id ? h("div", {}) : picker });
+}
+
+function startHistory({ body, picker }) {
+  return withGreenhouse({
+    picker,
+    mount: (greenhouseId) => mountHistory(body, greenhouseId),
+    onError: (error) => body.replaceChildren(errorNotice(error)),
+    onEmpty: () => body.replaceChildren(noGreenhouseNotice()),
+  });
 }
 
 // ── Vista: Configuración (admins) ─────────────────────────────────────
@@ -465,6 +530,7 @@ function renderFatal(error) {
 
 const VIEWS = {
   inicio: renderInicio,
+  historial: renderHistorial,
   configuracion: renderConfiguracion,
   plataforma: renderPlataforma,
 };

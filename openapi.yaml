@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.4.0
+  version: 1.5.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -37,6 +37,19 @@ info:
     encendido/apagado como automatico o manual
     (`GET /greenhouses/{greenhouse_id}/actuators/events`). La lectura agrega
     `modo`, `cmd_id`, `cmd_err` y `bomba_paro`.
+
+    **v1.5.0 (Sprint 3):** historico y analisis. Graficas (DASH-02):
+    `GET /greenhouses/{greenhouse_id}/readings` devuelve las lecturas
+    guardadas de un rango y
+    `GET /greenhouses/{greenhouse_id}/readings/series` devuelve UNA medicion
+    lista para dibujar, promediada por bucket (con el minimo y el maximo de
+    cada uno) cuando en el rango hay mas lecturas que `max_points`; un rango
+    valido sin lecturas responde 200 con `has_data: false`.
+    Analisis (AI-01): `GET /greenhouses/{greenhouse_id}/analysis` devuelve,
+    por medicion, un indicador de tendencia (`rising`, `stable`, `falling` o
+    `insufficient_data`), la pendiente por hora, el cambio estimado, el
+    periodo usado y la calidad del dato: cobertura, huecos y cuantas lecturas
+    traian ese sensor en `null`. Los huecos se reportan, nunca se rellenan.
 
     ## Convenciones que no se negocian
 
@@ -124,6 +137,8 @@ tags:
     description: Alertas por umbral del firmware (ALERT-01)
   - name: irrigation
     description: Riego automatico y manual (ACT-02)
+  - name: analysis
+    description: Analisis de la informacion historica (AI-01)
 
 security:
   - ApiKeyAuth: []
@@ -307,18 +322,31 @@ paths:
     get:
       tags: [readings]
       summary: Consultar mediciones de un vivero
-      description: Lo que consume el dashboard web para las graficas historicas.
+      description: |
+        Lecturas guardadas del rango, de la mas reciente a la mas antigua.
+        Sin `from` ni `to` se devuelven las ultimas 24 h. Un `producer` solo
+        consulta su vivero asignado.
+
+        Es el dato crudo (revisar o exportar). Para dibujar una grafica usa
+        `/readings/series`, que lo agrega cuando hay demasiados puntos.
+
+        Los campos que el firmware manda pero que no viven en la tabla de
+        lecturas (`bomba_activa`, `vent_activo`, `modo`, `cmd_id`, `cmd_err`,
+        `bomba_paro`) salen en `null`: su estado se consulta en
+        `/actuators/status` y en `/irrigation`.
       operationId: listReadings
+      security:
+        - BearerAuth: []
       parameters:
         - name: from
           in: query
-          description: Inicio del rango, ISO 8601 UTC
+          description: Inicio del rango (ISO 8601 CON zona). Por defecto, 24 h atras
           schema:
             type: string
             format: date-time
         - name: to
           in: query
-          description: Fin del rango, ISO 8601 UTC
+          description: Fin del rango (ISO 8601 CON zona). Por defecto, ahora
           schema:
             type: string
             format: date-time
@@ -339,9 +367,158 @@ paths:
                 items:
                   $ref: '#/components/schemas/StoredReading'
         '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/InvalidRange'
+
+  /greenhouses/{greenhouse_id}/readings/series:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [readings]
+      summary: Serie historica de una medicion (DASH-02)
+      description: |
+        Lo que dibuja la grafica del historial: UNA medicion en el rango
+        pedido, con su etiqueta, su unidad y sus puntos en orden de tiempo.
+
+        **Resolucion.** Si en el rango hay `max_points` lecturas o menos, se
+        devuelven tal cual (`aggregated: false`, `bucket_seconds: 0`). Si hay
+        mas, se promedian por bucket y cada punto trae ademas el `min` y el
+        `max` reales de ese bucket, para que promediar no esconda un pico.
+        Los buckets se alinean con la epoca Unix (multiplos exactos de su
+        tamano), asi que dos consultas del mismo periodo caen en los mismos
+        buckets.
+
+        **Sin datos.** Un rango valido sin lecturas NO es un error: responde
+        200 con `has_data: false` y `points: []`, para que la pagina muestre
+        un aviso en vez de una grafica vacia.
+
+        **Rango.** Sin `from` ni `to` se consultan las ultimas 24 h. Un rango
+        invertido o de mas de 90 dias responde 422 `invalid_range`.
+      operationId: getReadingSeries
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: metric
+          in: query
+          description: Medicion a graficar
+          schema:
+            $ref: '#/components/schemas/MetricKey'
+        - name: from
+          in: query
+          description: Inicio del rango (ISO 8601 CON zona). Por defecto, 24 h atras
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Fin del rango (ISO 8601 CON zona). Por defecto, ahora
+          schema:
+            type: string
+            format: date-time
+        - name: max_points
+          in: query
+          description: Puntos que se devuelven como maximo
+          schema:
+            type: integer
+            minimum: 10
+            maximum: 1000
+            default: 240
+      responses:
+        '200':
+          description: Serie lista para dibujar
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadingSeries'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/InvalidRange'
+
+  /greenhouses/{greenhouse_id}/analysis:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [analysis]
+      summary: Tendencias del vivero en un periodo (AI-01)
+      description: |
+        Analiza las lecturas guardadas del rango y devuelve, por medicion, si
+        va subiendo, estable o bajando, con la pendiente por hora, el cambio
+        estimado y la calidad del dato.
+
+        **Como se calcula.** Las lecturas se promedian por bucket (igual que
+        la grafica) y sobre esa serie se ajusta una recta por minimos
+        cuadrados. `stable` no es "pendiente cero": es que el cambio del
+        periodo no pasa de `stable_band`, la banda de ruido de esa medicion.
+        `fit_r2` dice que tan recta es la serie: un valor bajo significa que
+        la medicion se movio, pero no en linea recta (por ejemplo el ciclo
+        dia/noche de la temperatura en una ventana de 24 h).
+
+        **Huecos.** Los buckets sin lectura NO se rellenan: se devuelven en
+        `gaps`, y `readings_missing` cuenta las lecturas del rango que traian
+        esa medicion en `null` (sensor caido). `coverage_pct` dice que parte
+        del periodo se midio de verdad.
+
+        **Reproducible.** El resultado sale solo de las lecturas guardadas y
+        del periodo pedido: el mismo rango sobre los mismos datos da siempre
+        lo mismo. `generated_at` es metadato de la respuesta, no entra en el
+        calculo.
+
+        Aqui no se redacta ninguna recomendacion: eso es AI-05.
+      operationId: getGreenhouseAnalysis
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          description: Inicio del periodo (ISO 8601 CON zona). Por defecto, 24 h atras
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Fin del periodo (ISO 8601 CON zona). Por defecto, ahora
+          schema:
+            type: string
+            format: date-time
+        - name: bucket_seconds
+          in: query
+          description: |
+            Tamano del bucket. Por defecto se elige segun el rango (el mismo
+            que usa la grafica). Si parte el rango en mas de 1000 tramos
+            responde 422.
+          schema:
+            type: integer
+            minimum: 10
+            maximum: 86400
+      responses:
+        '200':
+          description: Tendencias por medicion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GreenhouseAnalysis'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/InvalidRange'
 
   # ── Sprint 2: sesiones de usuario (AUTH-01 / AUTH-02) ─────────────────
 
@@ -1955,6 +2132,247 @@ components:
           items:
             $ref: '#/components/schemas/AlertOut'
 
+    MetricKey:
+      type: string
+      description: |
+        Mediciones que se pueden graficar y analizar. Es el mismo catalogo
+        que usan las ultimas lecturas y las alertas.
+      enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct, luz_nivel]
+      default: temp_c
+
+    SeriesPoint:
+      type: object
+      description: |
+        Un punto de la grafica: una lectura, o el promedio de un bucket. En
+        modo agregado `min` y `max` son el rango real del bucket.
+      required: [ts, value, count]
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: Hora de la lectura, o inicio del bucket (UTC)
+        value:
+          type: number
+          description: Lectura, o promedio del bucket
+          example: 24.2
+        min:
+          type: number
+          nullable: true
+          description: Minimo del bucket (`null` en modo crudo)
+        max:
+          type: number
+          nullable: true
+          description: Maximo del bucket (`null` en modo crudo)
+        count:
+          type: integer
+          description: Lecturas que representa el punto (1 en modo crudo)
+          example: 10
+
+    ReadingSeries:
+      type: object
+      required:
+        [greenhouse_id, metric, label, unit, from, to, generated_at,
+         bucket_seconds, aggregated, max_points, reading_count, point_count,
+         has_data, points]
+      properties:
+        greenhouse_id:
+          type: string
+          example: vivero-rabano-01
+        metric:
+          $ref: '#/components/schemas/MetricKey'
+        label:
+          type: string
+          example: Temperatura del aire
+        unit:
+          type: string
+          example: °C
+        from:
+          type: string
+          format: date-time
+          description: Inicio del rango consultado (incluido)
+        to:
+          type: string
+          format: date-time
+          description: Fin del rango consultado (excluido)
+        generated_at:
+          type: string
+          format: date-time
+        bucket_seconds:
+          type: integer
+          description: Tamano del bucket; `0` = lecturas sin agregar
+          example: 600
+        aggregated:
+          type: boolean
+          description: Los puntos son promedios, no lecturas
+        max_points:
+          type: integer
+          example: 240
+        reading_count:
+          type: integer
+          description: Lecturas CON valor en el rango
+          example: 1440
+        point_count:
+          type: integer
+          example: 144
+        has_data:
+          type: boolean
+          description: '`false` = rango valido pero sin lecturas'
+        value_min:
+          type: number
+          nullable: true
+          description: Minimo de la serie (para la escala vertical)
+        value_max:
+          type: number
+          nullable: true
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/SeriesPoint'
+
+    TrendDirection:
+      type: string
+      description: |
+        Indicador de tendencia de una variable en el periodo.
+        `insufficient_data` = no hay buckets suficientes para sostener una
+        direccion (hacen falta 3).
+      enum: [rising, falling, stable, insufficient_data]
+
+    AnalysisGap:
+      type: object
+      description: Tramo del rango sin lecturas de esa medicion.
+      required: [from, to, seconds, buckets]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        seconds:
+          type: integer
+          example: 1800
+        buckets:
+          type: integer
+          example: 30
+
+    VariableAnalysis:
+      type: object
+      required:
+        [key, label, unit, trend, stable_band, samples, expected_samples,
+         coverage_pct, readings_used, readings_missing, gaps]
+      properties:
+        key:
+          $ref: '#/components/schemas/MetricKey'
+        label:
+          type: string
+        unit:
+          type: string
+        trend:
+          $ref: '#/components/schemas/TrendDirection'
+        slope_per_hour:
+          type: number
+          nullable: true
+          description: Pendiente de la recta ajustada, en unidades por hora
+          example: 1.2
+        change:
+          type: number
+          nullable: true
+          description: Cambio que estima la recta entre el primer y el ultimo dato
+          example: 7.2
+        stable_band:
+          type: number
+          description: Cambio que se considera ruido; debajo de esto, `stable`
+          example: 0.5
+        observed_hours:
+          type: number
+          nullable: true
+          description: Horas entre el primer y el ultimo dato (puede ser menos que el rango)
+        first:
+          type: number
+          nullable: true
+        last:
+          type: number
+          nullable: true
+        mean:
+          type: number
+          nullable: true
+        min:
+          type: number
+          nullable: true
+        max:
+          type: number
+          nullable: true
+        fit_r2:
+          type: number
+          nullable: true
+          description: 0 a 1; que tan bien la recta explica la serie
+        samples:
+          type: integer
+          description: Buckets con dato
+        expected_samples:
+          type: integer
+          description: Buckets que cubren el rango
+        coverage_pct:
+          type: number
+          description: Porcentaje del periodo con dato
+          example: 89.6
+        readings_used:
+          type: integer
+          description: Lecturas que entraron a los promedios
+        readings_missing:
+          type: integer
+          description: Lecturas del rango con esta medicion en `null` (sensor caido)
+        gaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysisGap'
+
+    AnalysisPeriod:
+      type: object
+      description: |
+        Periodo y resolucion con los que se corrio el analisis. Va en la
+        respuesta porque el indicador no significa nada sin el periodo, y
+        porque es lo que hace falta para repetir el mismo analisis.
+      required: [from, to, hours, bucket_seconds, expected_samples]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        hours:
+          type: number
+          example: 24
+        bucket_seconds:
+          type: integer
+          example: 600
+        expected_samples:
+          type: integer
+          example: 144
+
+    GreenhouseAnalysis:
+      type: object
+      required: [greenhouse_id, generated_at, period, has_data, readings, variables]
+      properties:
+        greenhouse_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+          description: Metadato de la respuesta; no entra en el calculo
+        period:
+          $ref: '#/components/schemas/AnalysisPeriod'
+        has_data:
+          type: boolean
+        readings:
+          type: integer
+          description: Lecturas del vivero en el rango
+        variables:
+          type: array
+          items:
+            $ref: '#/components/schemas/VariableAnalysis'
+
     ErrorDetail:
       type: object
       description: |
@@ -2000,3 +2418,17 @@ components:
             $ref: '#/components/schemas/ErrorDetail'
     ValidationError:
       description: Cuerpo o parametros invalidos (validacion de FastAPI)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+    InvalidRange:
+      description: |
+        El rango pedido no se puede consultar (`invalid_range`): `from` igual
+        o posterior a `to`, mas de 90 dias, o un `bucket_seconds` que parte el
+        rango en mas de 1000 tramos. Un parametro con un valor fuera de su
+        enum o de su rango numerico lo rechaza FastAPI con su propio 422.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'

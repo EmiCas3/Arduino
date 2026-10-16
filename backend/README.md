@@ -9,6 +9,8 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 | AUTH-02 | Control de acceso por rol en todas las rutas (401 / 403) |
 | CONF-05 | Registro de actuadores (bomba, ventilador, malla sombra, luz) |
 | DASH-01 | API de últimas lecturas por vivero, lista de viveros y refresco en segundo plano para los widgets del dashboard |
+| DASH-02 | Histórico de un rango y serie de una medición lista para graficar (promediada por bucket cuando hay demasiados puntos) |
+| AI-01 | Análisis de la información histórica: tendencia por variable, con el periodo usado y la calidad del dato |
 
 También sirve el frontend (`../frontend`) desde el mismo origen.
 
@@ -102,9 +104,12 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/irrigation` | Bearer | todos (productor: solo su vivero) |
 | PUT | `/greenhouses/{greenhouse_id}/irrigation/mode` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/actuators/events` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/readings` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/readings/series` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/analysis` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.4.0).
+El contrato completo está en `../openapi.yaml` (v1.5.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -160,6 +165,81 @@ sensor y umbral corresponde cada uno):
 falla y dice qué número actualizar en `CONSTANTS` de `app/firmware.py` (es
 una línea). El backend no vuelve a comparar valores: solo anota el número en
 la alerta.
+
+### Histórico y gráficas (DASH-02)
+
+Dos formas de leer lo mismo, las dos con el rango en `from` / `to` (ISO 8601
+**con zona**; sin ellos, las últimas 24 h; más de 90 días o un rango
+invertido → 422 `invalid_range`):
+
+| Endpoint | Qué devuelve |
+|---|---|
+| `GET /greenhouses/{id}/readings` | Las lecturas guardadas del rango, de la más nueva a la más vieja (`limit`, 200 por defecto). El dato crudo |
+| `GET /greenhouses/{id}/readings/series?metric=temp_c` | UNA medición lista para dibujar |
+
+**Por qué la serie va aparte.** El Arduino imprime una lectura cada 2 s, así
+que un día son ~43 000 lecturas: mandarlas al navegador deja una mancha, no
+una gráfica. `/readings/series` devuelve las lecturas tal cual solo si caben
+en `max_points` (240 por defecto); si no, las promedia por bucket y cada
+punto trae además el **mínimo y el máximo reales** de ese bucket, para que
+promediar no esconda un pico. `bucket_seconds` dice de cuánto quedó el paso y
+`aggregated` si hubo que promediar.
+
+Los buckets se alinean con la época Unix (múltiplos exactos de su tamaño), no
+con el inicio del rango: dos consultas del mismo periodo caen en los mismos
+buckets, que es lo que hace reproducible el análisis de AI-01.
+
+Un rango válido **sin lecturas no es un error**: responde 200 con
+`has_data: false` y `points: []`, para que la página muestre un aviso en vez
+de una gráfica vacía.
+
+La elección del rango y del bucket vive en `app/history.py`, aparte de los
+routers, y el catálogo de mediciones (columna, etiqueta, unidad, decimales)
+en `app/metrics.py`: es la única fuente de esos nombres, y el nombre de
+columna que entra a una consulta SQL sale **siempre** de ahí, nunca del
+texto que mandó el cliente.
+
+### Análisis histórico (AI-01)
+
+`GET /greenhouses/{id}/analysis` devuelve, por cada medición: si va
+`rising`, `falling`, `stable` o `insufficient_data`, la pendiente por hora,
+el cambio estimado en el periodo, primer y último valor, promedio, mínimo,
+máximo y la calidad del dato.
+
+El cálculo vive en `app/analysis.py`, en funciones puras:
+
+1. **Preprocesado** (`prepare`): las lecturas en `null` quedan fuera (es un
+   sensor caído, no un cero), lo demás se promedia por bucket y los buckets
+   sin lectura **no se rellenan**: se devuelven como `gaps`. Rellenar un
+   hueco con el valor anterior inventaría una tendencia que nadie midió.
+2. **Tendencia** (`trend`): mínimos cuadrados sobre esa serie. `stable` no es
+   "pendiente cero": es que el cambio del periodo no pasa de `stable_band`,
+   la banda de ruido de esa medición (`app/metrics.py`). Sin ella, una décima
+   de grado en seis horas se reportaría como "la temperatura está subiendo".
+
+Qué mirar en la respuesta:
+
+| Campo | Para qué |
+|---|---|
+| `period` | El periodo y el bucket que se usaron: el indicador no significa nada sin ellos |
+| `coverage_pct`, `gaps` | Qué parte del periodo se midió de verdad y dónde faltan datos |
+| `readings_missing` | Lecturas del rango que traían esa medición en `null` |
+| `fit_r2` | 0 a 1: qué tan recta es la serie |
+
+**`fit_r2` bajo no es un error.** Una recta sobre 24 h de temperatura explica
+poco, porque el día y la noche son un ciclo, no una línea: el `r2` lo dice en
+vez de esconderlo. Para ventanas largas conviene mirar rangos más cortos; el
+análisis que entiende el ciclo y cruza variables es AI-04.
+
+**Reproducible** (criterio del item): el resultado sale solo de las lecturas
+guardadas y del periodo pedido. No hay azar ni se mira el reloj;
+`generated_at` es metadato de la respuesta y no entra en el cálculo.
+
+Aquí **no** se redacta ninguna recomendación ni explicación: eso es AI-05.
+
+Los umbrales del rábano siguen viviendo en el firmware. `stable_band` es un
+parámetro de análisis, no un umbral agronómico, y está pendiente de ajustar
+con datos de varios días.
 
 ### Ejemplos
 
@@ -254,11 +334,17 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-262 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (40, incluye el barrido de todas las rutas), actuadores
+323 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (46, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (36), espejo de las constantes del firmware (5),
-riego (31) y frontend (15).
+riego (31), frontend (18), histórico y gráficas (22) y análisis (30).
+
+La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
+
+```bash
+node --test frontend/tests/metrics.test.mjs frontend/tests/series.test.mjs
+```
 
 ## Estructura
 
@@ -275,13 +361,17 @@ backend/
 │   ├── seed.py          # Datos de demo
 │   ├── actuator_state.py # Estado reportado de cada actuador (ACT-04)
 │   ├── firmware.py      # Espejo de los umbrales del .ino (solo lectura)
+│   ├── metrics.py       # Catálogo de mediciones: columna, etiqueta, unidad
+│   ├── history.py       # Rango y resolución de una consulta histórica (DASH-02 / AI-01)
+│   ├── analysis.py      # Preprocesado y tendencias, en funciones puras (AI-01)
 │   ├── alerts.py        # Motor de alertas (ALERT-01)
 │   ├── irrigation.py    # Riego: modo, órdenes, confirmaciones y registro (ACT-02)
 │   └── routers/
 │       ├── ingest.py    # POST readings (MON-04)
 │       ├── auth.py      # login / logout / me (AUTH-01)
 │       ├── actuators.py # CRUD sin DELETE (CONF-05) y órdenes manuales (ACT-02)
-│       ├── readings.py  # viveros visibles y últimas lecturas (DASH-01)
+│       ├── readings.py  # viveros, últimas lecturas (DASH-01) e histórico (DASH-02)
+│       ├── analysis.py  # tendencias del vivero (AI-01)
 │       ├── control.py   # estado de los equipos (ACT-04) y riego (ACT-02)
 │       └── alerts.py    # alertas del vivero (ALERT-01)
 ├── tests/
@@ -294,7 +384,7 @@ backend/
 | Tabla | Item | Notas |
 |---|---|---|
 | `devices` | MON-04 | Sin cambios |
-| `readings` | MON-04 | Sin cambios. Nuevo índice `(greenhouse_id, ts)` para DASH-01 |
+| `readings` | MON-04 | Sin cambios. El índice `(greenhouse_id, ts)` sirve a DASH-01 y a las consultas por rango de DASH-02 / AI-01 |
 | `users` | AUTH-01 | `role` ∈ producer / admin / super_admin; `greenhouse_id` = vivero asignado |
 | `sessions` | AUTH-01 | Timeout por inactividad, logout y revocación |
 | `actuators` | CONF-05 | Desactivar = `status='inactive'`; no hay DELETE |

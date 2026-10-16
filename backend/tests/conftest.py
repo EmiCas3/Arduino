@@ -1,5 +1,6 @@
 """
-Fixtures compartidas por los tests de AUTH-01, AUTH-02, CONF-05 y DASH-01.
+Fixtures compartidas por los tests de AUTH-01, AUTH-02, CONF-05, DASH-01,
+DASH-02 y AI-01.
 
 test_ingest.py conserva su propio fixture `client`; aquí el cliente se llama
 `api` para no chocar con él.
@@ -110,3 +111,52 @@ async def api(db):
 async def tokens(api):
     """Un JWT válido por rol: {'producer': ..., 'admin': ..., 'super_admin': ...}."""
     return {role: await login(api, role) for role in USERS}
+
+
+# ── Lecturas de prueba para el histórico (DASH-02 / AI-01) ─────────────
+
+READING_COLUMNS = (
+    "ms", "temp_c", "hum_aire_pct", "suelo_raw", "suelo_pct", "nivel_raw",
+    "nivel_pct", "luz_raw", "luz_nivel", "es_dia", "sol_min_hoy",
+    "sol_min_prev", "riego_sugerido", "bomba_habilitada", "vent", "estado",
+    "alertas",
+)
+
+
+def ts_text(moment: datetime) -> str:
+    """El formato con el que la ingesta guarda `ts`: UTC con milisegundos."""
+    return moment.astimezone(timezone.utc).isoformat(timespec="milliseconds")
+
+
+async def insert_readings(
+    db,
+    rows,
+    device_id: str = GATEWAY_ID,
+    greenhouse_id: str = GREENHOUSE_ID,
+) -> int:
+    """Guarda lecturas directo en la BD, como las habría guardado la ingesta.
+
+    `rows` son dicts con `ts` (datetime con zona) y las mediciones que haga
+    falta; lo que no venga queda en null, que es "sensor caído" en el
+    contrato. Las pruebas del histórico necesitan cientos o miles de lecturas:
+    mandarlas por el endpoint de ingesta sería lento y volvería a correr
+    alertas, riego y estado de actuadores, que no es lo que se está probando.
+    """
+    received = now_iso()
+    columns = ", ".join(READING_COLUMNS)
+    placeholders = ", ".join("?" for _ in READING_COLUMNS)
+    payload = [
+        (device_id, greenhouse_id, received, ts_text(row["ts"]),
+         *(row.get(column) for column in READING_COLUMNS))
+        for row in rows
+    ]
+    await db.executemany(
+        f"""
+        INSERT OR IGNORE INTO readings
+            (device_id, greenhouse_id, received_at, ts, {columns})
+        VALUES (?, ?, ?, ?, {placeholders})
+        """,
+        payload,
+    )
+    await db.commit()
+    return len(payload)

@@ -1356,6 +1356,154 @@ code, .mono {
   background: rgb(4 12 8 / 0.5);
 }
 
+/* ── Histórico: gráfica y tendencias (DASH-02 / AI-01) ──────────────── */
+
+.chart-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* La gráfica es un SVG con viewBox fijo que se escala al ancho de la
+   tarjeta. Todo su color sale de los tokens, así el tema oscuro no necesita
+   reglas aparte. */
+.chart {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+.chart:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chart-svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+
+.chart-line {
+  stroke: var(--leaf);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.chart-band { fill: var(--leaf); opacity: 0.16; stroke: none; }
+.chart-dot { fill: var(--leaf-strong); stroke: var(--surface); stroke-width: 2; }
+.chart-dot-lone { fill: var(--leaf); }
+.chart-rule { stroke: var(--line-strong); stroke-dasharray: 3 3; }
+.chart-grid { stroke: var(--line); }
+.chart-grid-x { opacity: 0.6; }
+.chart-axis { stroke: var(--line-strong); }
+.chart-tick, .chart-unit {
+  fill: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.chart-unit { fill: var(--faint); }
+.chart-placeholder { fill: var(--muted); font-family: var(--font-body); font-size: 14px; }
+.chart[data-state="empty"] .chart-placeholder { fill: var(--ink-2); }
+.chart[data-state="error"] .chart-placeholder { fill: var(--crit); }
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+.chart-legend:empty { display: none; }
+.chart-key { display: inline-flex; align-items: center; gap: 6px; }
+.chart-swatch { width: 14px; height: 3px; border-radius: 2px; background: var(--leaf); }
+.chart-swatch-band { height: 10px; opacity: 0.22; }
+.chart-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--step--1);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.chart-caption:empty { display: none; }
+.chart-note { margin: 0; font-size: var(--step--1); color: var(--muted); }
+.chart-note[hidden] { display: none; }
+
+/* Una tarjeta por variable analizada. Igual que las de DASH-01, la dirección
+   se comunica con color, ícono Y texto, nunca solo con color. */
+.trends {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+}
+.trends-period:empty { display: none; }
+.trend {
+  --t: var(--line-strong);
+  --t-soft: var(--surface-3);
+  --t-ink: var(--muted);
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--t);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.trend[data-tone="up"] { --t: var(--radish); --t-soft: var(--radish-soft); --t-ink: var(--radish); }
+.trend[data-tone="down"] { --t: var(--sky); --t-soft: var(--sky-soft); --t-ink: var(--sky); }
+.trend[data-tone="flat"] { --t: var(--leaf); --t-soft: var(--leaf-soft); --t-ink: var(--leaf-strong); }
+.trend[data-tone="none"] {
+  border-style: dashed;
+  border-left-style: solid;
+  background: var(--surface-2);
+}
+.trend-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
+}
+.trend-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.trend-label .icon { color: var(--muted); }
+.trend-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  background: var(--t-soft);
+  color: var(--t-ink);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.trend-pill .icon { width: 13px; height: 13px; stroke-width: 2.2; }
+.trend-reading {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 650;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.trend[data-tone="none"] .trend-reading { color: var(--faint); }
+.trend-change {
+  margin: 0;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--t-ink);
+  font-variant-numeric: tabular-nums;
+}
+.trend-quality {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 1020px) {
   .span-8, .span-7, .span-6, .span-5, .span-4 { grid-column: span 12; }
 }

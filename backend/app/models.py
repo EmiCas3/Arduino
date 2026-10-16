@@ -16,6 +16,8 @@ from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, validator
 
+from app.analysis import TrendDirection
+
 
 # ── Enums ──────────────────────────────────────────────────────────────
 
@@ -626,3 +628,154 @@ class ActuatorEventList(BaseModel):
 
 
 ActuatorLive.update_forward_refs(CommandOut=CommandOut)
+
+
+# ── Gráficas históricas (DASH-02) ──────────────────────────────────────
+
+class MetricKey(str, Enum):
+    """Mediciones que se pueden graficar y analizar.
+
+    Es el mismo catálogo de app/metrics.py (lo comprueba
+    tests/test_readings_series.py): el nombre de columna que llega a una
+    consulta SQL sale de ahí, nunca del texto que mandó el cliente.
+    """
+
+    temp_c = "temp_c"
+    hum_aire_pct = "hum_aire_pct"
+    suelo_pct = "suelo_pct"
+    nivel_pct = "nivel_pct"
+    luz_nivel = "luz_nivel"
+
+
+class SeriesPoint(BaseModel):
+    """Un punto de la gráfica: una lectura, o el promedio de un bucket.
+
+    En modo agregado `min` y `max` son el rango real del bucket, para que la
+    gráfica pueda dibujar la banda y no esconda un pico dentro del promedio.
+    """
+
+    ts: datetime = Field(..., description="Hora de la lectura, o inicio del bucket (UTC)")
+    value: Union[StrictInt, StrictFloat] = Field(..., description="Lectura o promedio del bucket")
+    min: Optional[Union[StrictInt, StrictFloat]] = Field(None, description="Mínimo del bucket")
+    max: Optional[Union[StrictInt, StrictFloat]] = Field(None, description="Máximo del bucket")
+    count: int = Field(..., description="Lecturas que representa (1 en modo crudo)")
+
+
+class ReadingSeries(BaseModel):
+    """Serie lista para dibujar de UNA medición en un rango de tiempo.
+
+    `bucket_seconds` 0 y `aggregated` false significan que son las lecturas
+    tal como se guardaron. Si en el rango hay más de `max_points` lecturas se
+    devuelven promediadas por bucket para que la gráfica siga siendo legible
+    (criterio 3 de DASH-02); `bucket_seconds` dice de cuánto es cada paso.
+    """
+
+    greenhouse_id: str
+    metric: MetricKey
+    label: str = Field(..., example="Temperatura del aire")
+    unit: str = Field(..., example="°C")
+    from_: datetime = Field(..., alias="from", description="Inicio del rango consultado (incluido)")
+    to: datetime = Field(..., description="Fin del rango consultado (excluido)")
+    generated_at: datetime
+    bucket_seconds: int = Field(..., description="Tamaño del bucket; 0 = lecturas sin agregar")
+    aggregated: bool = Field(..., description="Los puntos son promedios, no lecturas")
+    max_points: int = Field(..., description="Tope de puntos que se pidió")
+    reading_count: int = Field(..., description="Lecturas con valor en el rango")
+    point_count: int
+    has_data: bool = Field(..., description="false = rango válido pero sin lecturas")
+    value_min: Optional[Union[StrictInt, StrictFloat]] = Field(
+        None, description="Mínimo de la serie (para la escala vertical)"
+    )
+    value_max: Optional[Union[StrictInt, StrictFloat]] = Field(
+        None, description="Máximo de la serie (para la escala vertical)"
+    )
+    points: List[SeriesPoint] = Field(default_factory=list)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+# ── Análisis histórico (AI-01) ─────────────────────────────────────────
+
+class AnalysisGap(BaseModel):
+    """Tramo del rango sin lecturas de esa medición.
+
+    Se reportan en vez de rellenarse: el criterio 3 de AI-01 pide que los
+    huecos se digan, no que se tapen con el valor anterior.
+    """
+
+    from_: datetime = Field(..., alias="from")
+    to: datetime
+    seconds: int
+    buckets: int
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class VariableAnalysis(BaseModel):
+    """Tendencia de una medición en el periodo, con la calidad del dato."""
+
+    key: MetricKey
+    label: str
+    unit: str
+    trend: TrendDirection = Field(
+        ..., description="rising | falling | stable | insufficient_data"
+    )
+    slope_per_hour: Optional[float] = Field(
+        None, description="Pendiente de la recta ajustada, en unidades por hora"
+    )
+    change: Optional[float] = Field(
+        None, description="Cambio que estima la recta entre el primer y el último dato"
+    )
+    stable_band: float = Field(
+        ..., description="Cambio que se considera ruido: debajo de esto, `stable`"
+    )
+    observed_hours: Optional[float] = Field(
+        None, description="Horas entre el primer y el último dato (puede ser menos que el rango)"
+    )
+    first: Optional[float] = None
+    last: Optional[float] = None
+    mean: Optional[float] = None
+    min: Optional[float] = None
+    max: Optional[float] = None
+    fit_r2: Optional[float] = Field(
+        None, description="0 a 1: qué tan bien la recta explica la serie"
+    )
+    samples: int = Field(..., description="Buckets con dato")
+    expected_samples: int = Field(..., description="Buckets que cubren el rango")
+    coverage_pct: float = Field(..., description="Porcentaje del periodo con dato")
+    readings_used: int = Field(..., description="Lecturas que entraron a los promedios")
+    readings_missing: int = Field(
+        ..., description="Lecturas del rango con esta medición en null (sensor caído)"
+    )
+    gaps: List[AnalysisGap] = Field(default_factory=list)
+
+
+class AnalysisPeriod(BaseModel):
+    """Periodo y resolución con los que se corrió el análisis.
+
+    Va en la respuesta porque el criterio 1 de AI-01 pide que el indicador
+    venga "junto con el periodo usado", y porque es lo que hace falta para
+    repetir el mismo análisis y obtener el mismo resultado (criterio 2).
+    """
+
+    from_: datetime = Field(..., alias="from")
+    to: datetime
+    hours: float
+    bucket_seconds: int
+    expected_samples: int
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class GreenhouseAnalysis(BaseModel):
+    greenhouse_id: str
+    generated_at: datetime = Field(
+        ..., description="Metadato de la respuesta; no entra en el cálculo"
+    )
+    period: AnalysisPeriod
+    has_data: bool
+    readings: int = Field(..., description="Lecturas del vivero en el rango")
+    variables: List[VariableAnalysis]

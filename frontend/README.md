@@ -3,7 +3,8 @@
 Interfaz web del vivero de rábano. Hoy cubre **AUTH-01** (login), la parte
 de UI de **AUTH-02** (menú por rol), los widgets de lecturas en vivo de
 **DASH-01**, las alertas de **ALERT-01**, los actuadores de **CONF-05**, su
-estado en vivo (**ACT-04**) y el control del riego (**ACT-02**).
+estado en vivo (**ACT-04**), el control del riego (**ACT-02**), las gráficas
+históricas de **DASH-02** y las tendencias de **AI-01**.
 
 Es **HTML + CSS + JavaScript sin framework ni paso de build** (decisión D1 = A
 del plan del Sprint 2). FastAPI sirve esta carpeta desde el mismo origen que
@@ -33,16 +34,20 @@ frontend/
 │   ├── session.js    → JWT en sessionStorage + mensajes entre pantallas
 │   ├── roles.js      → rol → secciones del menú y pantalla de inicio
 │   ├── login.js      → lógica del login
-│   ├── panel.js      → vistas: Mi vivero, Configuración, Plataforma
+│   ├── panel.js      → vistas: Mi vivero, Historial, Configuración, Plataforma
 │   ├── dashboard.js  → DASH-01: tarjetas en vivo, refresco cada 15 s
 │   ├── metrics.js    → estados y textos de los widgets (lógica pura, sin DOM)
 │   ├── alerts.js     → ALERT-01: tarjeta "Alertas", avisos flotantes y contador
 │   ├── equipment.js  → ACT-04 y ACT-02: estado de los equipos y control del riego
 │   ├── poller.js     → refresco cada 15 s compartido por los widgets nuevos
+│   ├── history.js    → DASH-02 y AI-01: vista "Historial" (gráfica + tendencias)
+│   ├── chart.js      → DASH-02: la gráfica de líneas en SVG, sin librerías
+│   ├── series.js     → escalas, marcas y textos de la gráfica (lógica pura)
 │   ├── theme.js      → tema claro/oscuro
-│   └── ui.js         → h() para crear nodos de forma segura, íconos, fechas
+│   └── ui.js         → h() y svg() para crear nodos de forma segura, íconos, fechas
 ├── tests/
-│   └── metrics.test.mjs → pruebas de metrics.js con `node --test` (opcional)
+│   ├── metrics.test.mjs → pruebas de metrics.js con `node --test` (opcional)
+│   └── series.test.mjs  → pruebas de series.js (escalas, cortes, textos)
 └── assets/
     ├── favicon.svg
     └── fonts/        → Bricolage Grotesque, Instrument Sans, IBM Plex Mono (OFL)
@@ -165,8 +170,58 @@ Debajo de la bomba, en "Equipos del vivero":
 Pruebas de la lógica (opcional, necesita Node 18 o más; no hay `npm install`):
 
 ```bash
-node --test frontend/tests/metrics.test.mjs
+node --test frontend/tests/metrics.test.mjs frontend/tests/series.test.mjs
 ```
+
+## Historial: gráficas y tendencias (DASH-02 / AI-01)
+
+La sección "Historial" (`history.js`) tiene dos tarjetas:
+
+**Cómo evolucionó** — una medición en el tiempo, de
+`GET /greenhouses/{id}/readings/series`. Se elige la medición y el rango
+(6 h, 24 h, 7 días, 30 días).
+
+- **El servidor decide la resolución.** Si en el rango caben las lecturas
+  (`max_points`, 240), vienen tal cual; si no, vienen promediadas por bucket
+  y la gráfica pinta además la banda del mínimo al máximo de cada bucket, así
+  promediar no esconde un pico. El pie dice cuál fue: "promedio cada 10 min ·
+  639 lecturas" o "lectura por lectura · 179 lecturas".
+- **Donde faltan datos la línea se corta** (`splitSegments()`), en vez de
+  cruzar el hueco con una recta que nadie midió.
+- **Un rango sin lecturas** muestra el aviso dentro del lienzo ("No hay
+  lecturas de temperatura en este periodo."), no una gráfica vacía.
+- **La escala vertical se ajusta a los datos**, no a 0–100: un tanque que
+  bajó de 76 % a 74 % se tiene que ver bajando.
+- **Accesible:** el SVG es una imagen con su descripción y el pie dice en
+  texto el punto señalado. Con el mouse o con las flechas ←/→ (y Inicio/Fin)
+  se recorre la serie punto por punto.
+
+**Tendencias del periodo** — de `GET /greenhouses/{id}/analysis`: por cada
+medición, si va subiendo, estable o bajando, con el cambio del periodo y la
+calidad del dato ("cobertura 89.6 % · 2 huecos · 2 h 30 min · 20 sin dato del
+sensor"). El periodo y el paso usados se muestran arriba, porque el indicador
+no significa nada sin ellos. La explicación en lenguaje natural es AI-05: aquí
+solo se muestran los números que devuelve el análisis.
+
+El refresco es cada 60 s (`poller.js`, mismas reglas de sesión y visibilidad
+que los widgets): un histórico de horas o días no cambia cada 15 s.
+
+### Por qué la gráfica es SVG a mano y no uPlot
+
+El plan de este README (sección "Pasos siguientes") proponía vendorizar
+**uPlot**. Al implementarlo se eligió dibujar el SVG a mano (`chart.js`,
+~250 líneas) por tres razones:
+
+1. El backend ya entrega como máximo 240 puntos (criterio 3 de DASH-02), así
+   que la ventaja de uPlot —decenas de miles de puntos— no aplica.
+2. No se agrega un archivo de terceros al repo, con su licencia y su versión
+   que seguir.
+3. Los colores salen de los tokens de `:root`, así que el tema claro/oscuro
+   funciona sin puentes entre CSS y JavaScript.
+
+Si más adelante hace falta zoom, brush o varias series a la vez, vendorizar
+uPlot sigue siendo la salida: `history.js` solo llama a `createChart()` y
+`paint(series)`, y eso es lo único que habría que reimplementar.
 
 ## Identidad visual
 
@@ -206,21 +261,20 @@ empezado con React + Vite.
 
 ### Sprint 3 (historia y AI)
 
-1. **Librería de gráficas (DASH-02).** Copiar un archivo UMD con versión fija
-   a `frontend/vendor/` (recomendado **uPlot**: ~50 KB y rápido con miles de
-   puntos; alternativa **Chart.js**). Se carga con un `<script>` y no requiere
-   build. Envolverlo en `js/charts.js` con una función
-   `lineChart(container, series, options)` que lea los colores de los tokens
-   CSS, para que las gráficas respeten el tema claro/oscuro.
-   *Costo extra: ~2 h* (sin wrappers de React, el redimensionado y la
-   destrucción del gráfico al cambiar de vista son manuales).
-2. **Rango de fechas y "sin datos".** Controles `<input type="date">`
-   nativos; el mensaje explícito de rango vacío ya tiene el estilo `.empty`.
-3. **Agregación en el servidor.** El endpoint de histórico
-   (`/greenhouses/{id}/readings`) debe devolver los datos ya muestreados;
-   no conviene mandar 40 000 puntos al navegador.
-4. **Vistas de AI (AI-02, AI-05).** Tarjetas con la anomalía y la explicación
-   en lenguaje claro. Reutilizan `.card`, `.notice` y `.pill`.
+1. **Gráficas (DASH-02).** ✅ Hecho, pero **sin** la librería que proponía
+   este plan: `chart.js` dibuja el SVG a mano (ver "Por qué la gráfica es SVG
+   a mano"). *Costo real: parecido a las ~2 h estimadas.*
+2. **Rango y "sin datos".** ✅ Hecho con botones de rango (6 h / 24 h /
+   7 días / 30 días) en vez de `<input type="date">`: es lo que se usa en una
+   demo y evita validar rangos a mano. El aviso de rango vacío se dibuja
+   dentro del lienzo. Si hace falta elegir fechas exactas, la API ya acepta
+   `from` y `to`.
+3. **Agregación en el servidor.** ✅ Hecho: `/readings/series` devuelve como
+   máximo `max_points` puntos, promediados por bucket y con el mínimo y el
+   máximo de cada uno.
+4. **Vistas de AI.** AI-01 ✅ (tarjetas de tendencia en "Historial"). Faltan
+   AI-02 (anomalías) y AI-05 (explicación en lenguaje claro); reutilizan
+   `.card`, `.notice` y `.pill`.
 
 ### Sprint 4 (integración)
 

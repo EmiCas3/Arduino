@@ -23,6 +23,8 @@ const ICONS = {
   shade: '<path d="M3 8h18l-2.5 4h-13z"/><path d="M7 12v8M17 12v8M5 20h4M15 20h4"/>',
   bulb: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  trendUp: '<path d="M4 16.5l5.5-5.5 3.5 3L20 7"/><path d="M14.5 7H20v5.5"/>',
+  trendDown: '<path d="M4 7.5l5.5 5.5 3.5-3L20 17"/><path d="M14.5 17H20v-5.5"/>',
   minus: '<path d="M7 12h10"/>',
   chip: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
@@ -33,6 +35,7 @@ const ICONS = {
   users: '<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 20c.6-3.4 3.2-5.5 6.5-5.5s5.9 2.1 6.5 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18 14.8c2 .7 3.2 2.6 3.5 5.2"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  chart: '<path d="M4 4v16h16"/><path d="M7 14.5l3.5-4.5 3 2.5L19 7"/><circle cx="7" cy="14.5" r="1"/><circle cx="19" cy="7" r="1"/>',
   gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l3.5-5"/><circle cx="12" cy="17" r="1.2"/>',
   thermo: '<path d="M10 5a2 2 0 0 1 4 0v8.3a4 4 0 1 1-4 0z"/><path d="M12 9.5v6"/><circle cx="12" cy="16.5" r="1.1"/>',
   wind: '<path d="M3 9h10.5A2.5 2.5 0 1 0 11 6.5"/><path d="M3 14h15a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 19h6"/>',
@@ -52,6 +55,27 @@ export function icon(name, extraClass = "") {
   svg.setAttribute("aria-hidden", "true");
   svg.innerHTML = ICONS[name] || "";
   return svg;
+}
+
+/**
+ * Crea un elemento SVG: svg("line", { x1: 0, y1: 0, x2: 10, y2: 0 })
+ *
+ * Los nodos de una gráfica (DASH-02) tienen que crearse en el namespace de
+ * SVG: con document.createElement("path") el navegador hace un elemento HTML
+ * desconocido que no se dibuja. Mismas reglas que h(): los hijos de texto se
+ * insertan con createTextNode, nunca como HTML.
+ */
+export function svg(tag, props = {}, ...children) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    el.setAttribute(key, value === true ? "" : String(value));
+  }
+  for (const child of children.flat(Infinity)) {
+    if (child === null || child === undefined || child === false) continue;
+    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return el;
 }
 
 /**

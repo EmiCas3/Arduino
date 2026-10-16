@@ -1,5 +1,5 @@
 """
-Últimas lecturas de un vivero (DASH-01, task "Build latest readings API").
+Lecturas de un vivero: las últimas (DASH-01) y el histórico (DASH-02).
 
 Devuelve el último valor conocido de cada medición con su unidad, cuándo se
 tomó, cuánto hace de eso y si ya está vieja (más antigua que
@@ -13,16 +13,30 @@ vivero llegó con ese sensor en null.
 También lista los viveros que el usuario puede consultar (GET /greenhouses),
 para que un Administrador, que no tiene vivero asignado, elija cuál ver.
 
+DASH-02 agrega el histórico, con dos formas de leer lo mismo:
+
+- `GET /{id}/readings` — las lecturas guardadas de un rango, tal cual. Es el
+  contrato que se publicó en el spec desde SYS-01: sirve para revisar o
+  exportar los datos crudos.
+- `GET /{id}/readings/series` — UNA medición lista para dibujar. Si en el
+  rango hay más lecturas que `max_points`, se devuelven promediadas por
+  bucket, con el mínimo y el máximo de cada bucket, para que la gráfica siga
+  siendo legible (criterio 3 de DASH-02). Un rango válido sin lecturas
+  responde `has_data=false` con la lista vacía, y la página muestra el aviso
+  en vez de una gráfica en blanco (criterio 2).
+
 Permisos (AUTH-02): todos los roles; un productor solo consulta su vivero.
 """
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 import aiosqlite
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
+from app import history
+from app import metrics as metric_catalog
 from app.config import settings
 from app.database import get_db
 from app.dependencies import (
@@ -40,6 +54,10 @@ from app.models import (
     LatestMetric,
     LatestReadings,
     LatestReadingSummary,
+    MetricKey,
+    ReadingSeries,
+    SeriesPoint,
+    StoredReading,
 )
 
 router = APIRouter(
@@ -48,19 +66,27 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
-# (columna, etiqueta, unidad, columna raw). Los nombres de columna de las
-# consultas salen SOLO de esta tupla fija, nunca de texto del cliente.
-METRICS = (
-    ("temp_c", "Temperatura del aire", "°C", None),
-    ("hum_aire_pct", "Humedad del aire", "%", None),
-    ("suelo_pct", "Humedad de la tierra", "%", "suelo_raw"),
-    ("nivel_pct", "Nivel del tanque", "%", "nivel_raw"),
-    ("luz_nivel", "Luz", "nivel 0-1023", "luz_raw"),
+# (columna, etiqueta, unidad, columna raw) desde el catálogo de app/metrics.py,
+# que es la única fuente de estos nombres. Los nombres de columna que entran a
+# una consulta SQL salen SOLO de ahí, nunca de texto del cliente.
+METRICS = tuple(
+    (metric.key, metric.label, metric.unit, metric.raw_column)
+    for metric in metric_catalog.METRICS
 )
+
+# Campos de `readings` que el contrato devuelve como booleanos.
+_BOOL_COLUMNS = ("es_dia", "riego_sugerido", "bomba_habilitada")
 
 
 def _as_bool(value) -> Optional[bool]:
     return None if value is None else bool(value)
+
+
+def _invalid_range(error: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={"error": "invalid_range", "message": str(error)},
+    )
 
 
 @router.get(
@@ -192,3 +218,207 @@ async def latest_readings(
         last_reading=summary,
         metrics=metrics,
     )
+
+
+# ── Histórico (DASH-02) ────────────────────────────────────────────────
+
+@router.get(
+    "/{greenhouse_id}/readings",
+    response_model=List[StoredReading],
+    responses={code: {"model": ErrorResponse} for code in (401, 403, 422)},
+    summary="Consultar mediciones de un vivero",
+    description=(
+        "Lecturas guardadas del rango, de la más reciente a la más antigua. "
+        "Sin `from` ni `to` se devuelven las últimas 24 horas. Es el dato "
+        "crudo: para dibujar una gráfica usa `/readings/series`, que lo "
+        "agrega cuando hay demasiados puntos."
+    ),
+)
+async def list_readings(
+    greenhouse_id: str = Path(..., min_length=1, max_length=64),
+    from_: Optional[datetime] = Query(
+        None, alias="from", description="Inicio del rango (ISO 8601 con zona). Por defecto, 24 h atrás"
+    ),
+    to: Optional[datetime] = Query(
+        None, description="Fin del rango (ISO 8601 con zona). Por defecto, ahora"
+    ),
+    limit: int = Query(200, ge=1, le=1000, description="Lecturas como máximo"),
+    user: dict = Depends(require_roles(*ALL_ROLES)),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> List[StoredReading]:
+    ensure_greenhouse_access(user, greenhouse_id)
+    try:
+        window = history.parse_window(from_, to, utcnow())
+    except history.RangeError as error:
+        raise _invalid_range(error)
+
+    cursor = await db.execute(
+        """
+        SELECT * FROM readings
+        WHERE greenhouse_id = ? AND ts >= ? AND ts < ?
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (greenhouse_id, history.ts_text(window.start), history.ts_text(window.end), limit),
+    )
+    return [_stored_reading(row) for row in await cursor.fetchall()]
+
+
+def _stored_reading(row: aiosqlite.Row) -> StoredReading:
+    """Una fila de `readings` como la devuelve el contrato.
+
+    Los campos que el firmware manda pero que no viven en esta tabla
+    (`bomba_activa`, `modo`, `cmd_id`…) quedan en null: se guardan en
+    actuator_states y controller_status, cada uno con su endpoint.
+    """
+    data = {key: row[key] for key in row.keys()}
+    data["alertas"] = json.loads(data["alertas"]) if data.get("alertas") else None
+    for column in _BOOL_COLUMNS:
+        data[column] = _as_bool(data.get(column))
+    return StoredReading(**data)
+
+
+@router.get(
+    "/{greenhouse_id}/readings/series",
+    response_model=ReadingSeries,
+    responses={code: {"model": ErrorResponse} for code in (401, 403, 422)},
+    summary="Serie histórica de una medición",
+    description=(
+        "Lo que dibuja la gráfica de la página de historial. Devuelve una "
+        "medición en el rango pedido: las lecturas tal cual si caben en "
+        "`max_points`, o promedios por bucket (con el mínimo y el máximo de "
+        "cada uno) si no caben. `bucket_seconds` dice de cuánto quedó cada "
+        "paso y `aggregated` si hubo que promediar. Un rango sin lecturas "
+        "responde 200 con `has_data=false`."
+    ),
+)
+async def readings_series(
+    greenhouse_id: str = Path(..., min_length=1, max_length=64),
+    metric: MetricKey = Query(MetricKey.temp_c, description="Medición a graficar"),
+    from_: Optional[datetime] = Query(
+        None, alias="from", description="Inicio del rango (ISO 8601 con zona). Por defecto, 24 h atrás"
+    ),
+    to: Optional[datetime] = Query(
+        None, description="Fin del rango (ISO 8601 con zona). Por defecto, ahora"
+    ),
+    max_points: int = Query(
+        history.DEFAULT_MAX_POINTS,
+        ge=history.MIN_MAX_POINTS,
+        le=history.MAX_MAX_POINTS,
+        description="Puntos que se devuelven como máximo",
+    ),
+    user: dict = Depends(require_roles(*ALL_ROLES)),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> ReadingSeries:
+    ensure_greenhouse_access(user, greenhouse_id)
+    now = utcnow()
+    try:
+        window = history.parse_window(from_, to, now)
+    except history.RangeError as error:
+        raise _invalid_range(error)
+
+    definition = metric_catalog.BY_KEY[metric.value]
+    column = definition.key                     # sale del catálogo, no del cliente
+    since, until = history.ts_text(window.start), history.ts_text(window.end)
+    bounds = (greenhouse_id, since, until)
+
+    cursor = await db.execute(
+        f"""
+        SELECT COUNT({column}) AS readings
+        FROM readings
+        WHERE greenhouse_id = ? AND ts >= ? AND ts < ?
+        """,
+        bounds,
+    )
+    reading_count = (await cursor.fetchone())["readings"]
+
+    # Se agrega según las lecturas que HAY, no según las que podría haber: un
+    # rango de un mes con cuatro lecturas se dibuja con sus cuatro puntos.
+    bucket_seconds = 0 if reading_count <= max_points else history.choose_bucket(
+        window.span_seconds, max_points
+    )
+
+    if reading_count == 0:
+        points: List[SeriesPoint] = []
+    elif bucket_seconds == 0:
+        points = await _raw_points(db, column, bounds)
+    else:
+        points = await _bucket_points(db, definition, bucket_seconds, bounds)
+
+    lows = [point.min if point.min is not None else point.value for point in points]
+    highs = [point.max if point.max is not None else point.value for point in points]
+
+    return ReadingSeries(
+        greenhouse_id=greenhouse_id,
+        metric=metric,
+        label=definition.label,
+        unit=definition.unit,
+        from_=window.start,
+        to=window.end,
+        generated_at=now,
+        bucket_seconds=bucket_seconds,
+        aggregated=bucket_seconds > 0,
+        max_points=max_points,
+        reading_count=reading_count,
+        point_count=len(points),
+        has_data=bool(points),
+        value_min=min(lows) if lows else None,
+        value_max=max(highs) if highs else None,
+        points=points,
+    )
+
+
+async def _raw_points(
+    db: aiosqlite.Connection, column: str, bounds: tuple
+) -> List[SeriesPoint]:
+    """Las lecturas del rango, sin agregar (caben en `max_points`)."""
+    cursor = await db.execute(
+        f"""
+        SELECT ts, {column} AS value
+        FROM readings
+        WHERE greenhouse_id = ? AND ts >= ? AND ts < ? AND {column} IS NOT NULL
+        ORDER BY ts
+        """,
+        bounds,
+    )
+    return [
+        SeriesPoint(ts=parse_utc(row["ts"]), value=row["value"], count=1)
+        for row in await cursor.fetchall()
+    ]
+
+
+async def _bucket_points(
+    db: aiosqlite.Connection,
+    definition: metric_catalog.Metric,
+    bucket_seconds: int,
+    bounds: tuple,
+) -> List[SeriesPoint]:
+    """Promedio, mínimo y máximo por bucket.
+
+    Los buckets se alinean con la época Unix (no con el inicio del rango), así
+    que dos consultas del mismo periodo caen en los mismos buckets.
+    """
+    cursor = await db.execute(
+        f"""
+        SELECT CAST(strftime('%s', ts) / ? AS INTEGER) * ? AS bucket,
+               AVG({definition.key}) AS average,
+               MIN({definition.key}) AS low,
+               MAX({definition.key}) AS high,
+               COUNT({definition.key}) AS readings
+        FROM readings
+        WHERE greenhouse_id = ? AND ts >= ? AND ts < ? AND {definition.key} IS NOT NULL
+        GROUP BY bucket
+        ORDER BY bucket
+        """,
+        (bucket_seconds, bucket_seconds, *bounds),
+    )
+    return [
+        SeriesPoint(
+            ts=history.from_epoch(row["bucket"]),
+            value=round(row["average"], definition.average_decimals),
+            min=row["low"],
+            max=row["high"],
+            count=row["readings"],
+        )
+        for row in await cursor.fetchall()
+    ]

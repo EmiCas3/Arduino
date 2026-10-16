@@ -18,6 +18,7 @@ const ADMINS = ["admin", "super_admin"];
 
 export const SECTIONS = [
   { id: "inicio", label: "Mi vivero", icon: "sprout", roles: ALL },
+  { id: "historial", label: "Historial", icon: "chart", roles: ALL },
   { id: "configuracion", label: "Configuración", icon: "sliders", roles: ADMINS },
   { id: "plataforma", label: "Plataforma", icon: "shield", roles: ["super_admin"] },
 ];
@@ -32,6 +33,7 @@ export const LANDING = {
 /** Espejo informativo de las reglas del servidor, para mostrarlas en la UI. */
 export const PERMISSIONS = [
   { label: "Ver el estado de su vivero", roles: ALL },
+  { label: "Ver su histórico y sus tendencias", roles: ALL },
   { label: "Ver los equipos de su vivero y si están encendidos", roles: ALL },
   { label: "Cambiar el riego a automático o manual y regar a mano", roles: ALL },
   { label: "Consultar cualquier vivero", roles: ADMINS },
