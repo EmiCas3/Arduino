@@ -11,14 +11,16 @@ en la respuesta porque son parte del resultado (criterio 1) y porque son lo
 que hace falta para repetir el análisis (criterio 2).
 
 El cálculo vive en app/analysis.py y es puro. Aquí solo se traducen las
-lecturas guardadas a esa entrada, con dos consultas:
+lecturas guardadas a esa entrada, con UNA consulta: por bucket, cuántas
+lecturas hay y el promedio y la cuenta de cada medición. Agrupar en SQLite es
+parte del preprocesado: traer un mes de lecturas crudas a Python serían
+cientos de miles de filas para dibujar 240 puntos.
 
-1. Cuántas lecturas hay en el rango y cuántas trajeron cada medición. La
-   diferencia son las que el sensor no dio (`null` = sensor caído): se
-   reportan como `readings_missing`, no se esconden (criterio 3).
-2. Promedio y cuenta por bucket de las cinco mediciones a la vez. Agrupar en
-   SQLite es parte del preprocesado: traer un mes de lecturas crudas a Python
-   serían cientos de miles de filas para dibujar 144 puntos.
+Sumando los buckets salen cuántas lecturas hay en el rango y cuántas trajeron
+cada medición. La diferencia son las que el sensor no dio (`null` = sensor
+caído): se reportan como `readings_missing`, no se esconden (criterio 3).
+(Antes era una consulta aparte; con 30 días eran ~0.4 s más por refresco con
+la única conexión a la BD.)
 
 Permisos (AUTH-02): todos los roles; un productor solo analiza su vivero.
 """
@@ -115,8 +117,8 @@ async def analyze_greenhouse(
         )
 
     bounds = (greenhouse_id, history.ts_text(window.start), history.ts_text(window.end))
-    counts = await _count_readings(db, bounds)
     buckets = await _bucket_rows(db, bucket, bounds)
+    counts = _totals(buckets)
 
     variables: List[VariableAnalysis] = []
     for metric in metric_catalog.METRICS:
@@ -175,36 +177,30 @@ async def analyze_greenhouse(
     )
 
 
-async def _count_readings(db: aiosqlite.Connection, bounds: tuple) -> dict:
-    """Lecturas del rango y cuántas trajeron cada medición (no null).
-
-    Los nombres de columna salen del catálogo (app/metrics.py), nunca del
-    cliente.
-    """
-    columns = ", ".join(f"COUNT({metric.key}) AS {metric.key}" for metric in metric_catalog.METRICS)
-    cursor = await db.execute(
-        f"""
-        SELECT COUNT(*) AS total, {columns}
-        FROM readings
-        WHERE greenhouse_id = ? AND ts >= ? AND ts < ?
-        """,
-        bounds,
-    )
-    row = await cursor.fetchone()
-    return {key: row[key] for key in row.keys()}
+def _totals(buckets: List[aiosqlite.Row]) -> dict:
+    """Lecturas del rango y cuántas trajeron cada medición (no null)."""
+    totals = {"total": sum(row["total"] for row in buckets)}
+    for metric in metric_catalog.METRICS:
+        totals[metric.key] = sum(row[f"{metric.key}_n"] for row in buckets)
+    return totals
 
 
 async def _bucket_rows(
     db: aiosqlite.Connection, bucket: int, bounds: tuple
 ) -> List[aiosqlite.Row]:
-    """Promedio y cuenta por bucket de todas las mediciones, en una consulta."""
+    """Por bucket: lecturas, y promedio y cuenta de cada medición.
+
+    Los nombres de columna salen del catálogo (app/metrics.py), nunca del
+    cliente.
+    """
     columns = ", ".join(
         f"AVG({metric.key}) AS {metric.key}_avg, COUNT({metric.key}) AS {metric.key}_n"
         for metric in metric_catalog.METRICS
     )
     cursor = await db.execute(
         f"""
-        SELECT CAST(strftime('%s', ts) / ? AS INTEGER) * ? AS bucket, {columns}
+        SELECT CAST(strftime('%s', ts) / ? AS INTEGER) * ? AS bucket,
+               COUNT(*) AS total, {columns}
         FROM readings
         WHERE greenhouse_id = ? AND ts >= ? AND ts < ?
         GROUP BY bucket

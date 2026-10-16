@@ -636,7 +636,7 @@ class MetricKey(str, Enum):
     """Mediciones que se pueden graficar y analizar.
 
     Es el mismo catálogo de app/metrics.py (lo comprueba
-    tests/test_readings_series.py): el nombre de columna que llega a una
+    tests/test_readings_history.py): el nombre de columna que llega a una
     consulta SQL sale de ahí, nunca del texto que mandó el cliente.
     """
 

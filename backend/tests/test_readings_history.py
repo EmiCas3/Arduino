@@ -268,6 +268,121 @@ async def test_an_unusable_range_is_rejected(api, tokens, params, reason):
     assert resp.json()["detail"]["message"]
 
 
+ANALYSIS_URL = f"/api/v1/greenhouses/{GREENHOUSE_ID}/analysis"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [SERIES_URL, LIST_URL, ANALYSIS_URL])
+@pytest.mark.parametrize("params", [
+    {"from": "2026-10-15T00:00:00"},
+    {"from": "2026-10-15T00:00:00Z", "to": "2026-10-15T06:00:00"},
+])
+async def test_a_date_without_time_zone_is_rejected(api, tokens, url, params):
+    """Caso 12b: igual que la ingesta, `from`/`to` llevan zona horaria.
+
+    Sin zona, FastAPI la acepta y antes se tomaba como UTC: alguien que
+    escribía su hora de México veía el rango corrido 6 h.
+    """
+    resp = await api.get(url, params=params, headers=bearer(tokens["producer"]))
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_range"
+    assert "zona horaria" in resp.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [SERIES_URL, LIST_URL, ANALYSIS_URL])
+@pytest.mark.parametrize("params", [
+    {"to": "0001-01-01T00:00:00Z"},                 # 24 h antes del año 1
+    {"to": "9999-12-31T23:59:59-01:00"},            # en UTC ya es el año 10000
+])
+async def test_a_date_at_the_ends_of_the_calendar_is_not_a_crash(api, tokens, url, params):
+    """Caso 12c: una fecha imposible de restar es un rango inválido, no un 500."""
+    resp = await api.get(url, params=params, headers=bearer(tokens["producer"]))
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_range"
+
+
+@pytest.mark.parametrize("hours, max_points", [
+    (24, 240), (24 * 7, 168), (24 * 7, 240), (24 * 30, 240), (24 * 90, 10), (6, 240),
+])
+def test_the_chosen_bucket_fits_even_when_the_range_is_not_aligned(hours, max_points):
+    """Caso 9b (criterio 3): con buckets alineados a la época, un rango de n
+    buckets puede tocar n + 1. El bucket elegido tiene que caber con ese de más."""
+    start = datetime(2026, 10, 15, 12, 0, 30, tzinfo=timezone.utc)
+    window = history.Window(start=start, end=start + timedelta(hours=hours))
+    bucket = history.choose_bucket(window.span_seconds, max_points)
+    if bucket:
+        assert history.grid(window, bucket).count <= max_points
+
+
+@pytest.mark.asyncio
+async def test_seven_days_with_a_tight_cap_stay_under_it(api, db, tokens):
+    """Caso 9c (criterio 3): 7 días con `max_points=168` daban buckets de 1 h
+    y, con el rango corrido respecto a la hora, 169 puntos."""
+    # A la media hora y 17 s: el primer y el último bucket de 1 h quedan a
+    # medias y los dos traen lecturas.
+    on_the_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    end = on_the_hour - timedelta(minutes=30) + timedelta(seconds=17)
+    await insert_readings(db, ramp(2016, step_seconds=300, end=end, first=20.0, rise=0.001))
+
+    data = (await api.get(SERIES_URL, params={
+        "metric": "temp_c", "from": ts_text(end - timedelta(days=7)), "to": ts_text(end),
+        "max_points": 168,
+    }, headers=bearer(tokens["producer"]))).json()
+
+    assert data["aggregated"] is True
+    assert sum(point["count"] for point in data["points"]) == data["reading_count"]
+    assert 0 < data["point_count"] <= 168
+
+
+@pytest.mark.asyncio
+async def test_thirty_days_with_the_default_cap_stay_under_it(api, db, tokens):
+    """Caso 9d (criterio 3): el rango de 30 días de la página, con el tope de
+    siempre, cabe y no pierde lecturas."""
+    end = minutes_ago(1)
+    await insert_readings(db, ramp(1440, step_seconds=1800, end=end, first=20.0, rise=0.001))
+
+    data = (await api.get(SERIES_URL, params={
+        "metric": "temp_c", "from": ts_text(end - timedelta(days=30)),
+    }, headers=bearer(tokens["producer"]))).json()
+
+    assert data["aggregated"] is True
+    assert data["reading_count"] == 1440
+    assert sum(point["count"] for point in data["points"]) == 1440
+    assert 0 < data["point_count"] <= data["max_points"] == 240
+
+
+@pytest.mark.asyncio
+async def test_readings_faster_than_usual_are_still_capped(api, db, tokens):
+    """Caso 9e (criterio 3): una lectura por segundo (simulador en time-lapse)
+    en un rango corto. Antes se devolvían crudas aunque no cupieran."""
+    end = minutes_ago(1)
+    await insert_readings(db, ramp(400, step_seconds=1, end=end, first=20.0, rise=0.01))
+
+    data = (await api.get(SERIES_URL, params={
+        "metric": "temp_c", "from": ts_text(end - timedelta(seconds=410)),
+        "to": ts_text(end), "max_points": 240,
+    }, headers=bearer(tokens["producer"]))).json()
+
+    assert data["aggregated"] is True
+    assert data["reading_count"] == 400
+    assert 0 < data["point_count"] <= 240
+
+
+@pytest.mark.asyncio
+async def test_a_long_range_with_few_readings_is_still_raw(api, db, tokens):
+    """Caso 10b: un mes con cuatro lecturas se dibuja con sus cuatro puntos."""
+    end = minutes_ago(1)
+    await insert_readings(db, ramp(4, step_seconds=86400 * 5, end=end, first=20.0, rise=1.0))
+
+    data = (await api.get(SERIES_URL, params={
+        "metric": "temp_c", "from": ts_text(end - timedelta(days=30)),
+    }, headers=bearer(tokens["producer"]))).json()
+
+    assert data["aggregated"] is False and data["bucket_seconds"] == 0
+    assert data["reading_count"] == 4 and data["point_count"] == 4
+
+
 @pytest.mark.asyncio
 async def test_an_unknown_metric_is_rejected(api, tokens):
     """Caso 13: solo se grafican las mediciones del catálogo."""

@@ -82,14 +82,19 @@ class Window:
 
 
 def _utc(value: datetime) -> datetime:
-    """Un datetime con zona (lo exige FastAPI al parsear) llevado a UTC.
+    """Un datetime llevado a UTC.
 
-    Un datetime sin zona solo puede venir de código nuestro; se asume UTC
-    antes que adivinar la zona del servidor.
+    Los que manda el cliente ya llegan con zona (parse_window rechaza los que
+    no la traen). Uno sin zona solo puede venir de código nuestro; se asume
+    UTC antes que adivinar la zona del servidor.
     """
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _has_zone(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
 
 
 def parse_window(
@@ -101,12 +106,26 @@ def parse_window(
     """Ventana a consultar a partir de lo que pidió el cliente.
 
     - Sin `to`: hasta ahora. Sin `from`: `span_hours` antes de `to`.
+    - `from` y `to` deben traer zona horaria, igual que el `ts` de la
+      ingesta: FastAPI acepta "2026-10-15T00:00:00" sin zona, y tomarla como
+      UTC corre 6 h el rango de alguien que escribió su hora de México.
     - `from` igual o posterior a `to` es un error, no un rango vacío: el
       cliente se equivocó y hay que decírselo (criterio 2 de DASH-02 es para
       un rango válido SIN datos, que es otra cosa).
+    - Una fecha en los extremos del calendario (año 1 o 9999) no se puede
+      restar ni pasar a UTC: también es un rango inválido, no un error 500.
     """
-    to = _utc(end) if end is not None else _utc(now)
-    since = _utc(start) if start is not None else to - timedelta(hours=span_hours)
+    for name, value in (("from", start), ("to", end)):
+        if value is not None and not _has_zone(value):
+            raise RangeError(
+                f"`{name}` debe llevar zona horaria (por ejemplo "
+                "2026-10-15T00:00:00Z o 2026-10-15T00:00:00-06:00)."
+            )
+    try:
+        to = _utc(end) if end is not None else _utc(now)
+        since = _utc(start) if start is not None else to - timedelta(hours=span_hours)
+    except (OverflowError, ValueError):
+        raise RangeError("La fecha está fuera del rango que se puede consultar.") from None
 
     if since >= to:
         raise RangeError("`from` debe ser anterior a `to`.")
@@ -124,18 +143,36 @@ def choose_bucket(
 
     Devuelve 0 cuando en el rango no caben más de `max_points` lecturas ni en
     el peor caso (todas presentes): ahí agregar solo perdería detalle.
+
+    Los buckets van alineados con la época, no con el inicio del rango, así
+    que un rango de `n` buckets de largo puede tocar `n + 1` (el primero y el
+    último a medias). Ese bucket de más se cuenta: por ejemplo, 7 días con
+    `max_points=168` daban buckets de 1 h y 169 puntos.
     """
     max_points = max(MIN_MAX_POINTS, min(MAX_MAX_POINTS, max_points))
     span_seconds = max(1, span_seconds)
     if span_seconds / max(1, interval_seconds) <= max_points:
         return 0
     for bucket in BUCKET_CHOICES:
-        if math.ceil(span_seconds / bucket) <= max_points:
+        if math.ceil(span_seconds / bucket) + 1 <= max_points:
             return bucket
     # Rango más largo que MAX_SPAN_DAYS (no debería llegar aquí): se redondea
     # a días completos para no devolver un bucket de tamaño arbitrario.
-    days = math.ceil(span_seconds / max_points / 86400)
+    days = math.ceil(span_seconds / (max_points - 1) / 86400)
     return days * 86400
+
+
+def smallest_bucket_for(window: "Window", max_points: int) -> int:
+    """El bucket más fino cuya rejilla sobre la ventana cabe en `max_points`.
+
+    Para rangos cortos en los que llegan lecturas más seguido de lo normal
+    (el simulador en time-lapse, o dos gateways en el mismo vivero):
+    `choose_bucket` diría "caben crudas" contando una cada 2 s, y no es así.
+    """
+    for bucket in BUCKET_CHOICES:
+        if grid(window, bucket).count <= max_points:
+            return bucket
+    return MAX_BUCKET_SECONDS
 
 
 @dataclass(frozen=True)

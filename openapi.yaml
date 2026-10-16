@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.5.0
+  version: 1.5.1
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -50,6 +50,15 @@ info:
     `insufficient_data`), la pendiente por hora, el cambio estimado, el
     periodo usado y la calidad del dato: cobertura, huecos y cuantas lecturas
     traian ese sensor en `null`. Los huecos se reportan, nunca se rellenan.
+
+    **v1.5.1 (Sprint 3, correcciones):** el analisis ya no deja fuera las
+    lecturas del ultimo bucket (antes se perdian sin reportarse como hueco), y
+    los huecos se recortan al rango pedido. `from` y `to` sin zona horaria, o
+    en los extremos del calendario, se rechazan con 422 `invalid_range` (antes
+    se tomaban como UTC o daban 500). `/readings/series` nunca devuelve mas de
+    `max_points` puntos. El 422 documenta las dos formas reales: la de FastAPI
+    (`HTTPValidationError`) y la del backend (`ErrorDetail`). `/readings`
+    declara el header `X-SG-Background`. Sin rutas ni campos nuevos.
 
     ## Convenciones que no se negocian
 
@@ -338,15 +347,16 @@ paths:
       security:
         - BearerAuth: []
       parameters:
+        - $ref: '#/components/parameters/Background'
         - name: from
           in: query
-          description: Inicio del rango (ISO 8601 CON zona). Por defecto, 24 h atras
+          description: Inicio del rango (ISO 8601 CON zona; sin zona da 422). Por defecto, 24 h atras
           schema:
             type: string
             format: date-time
         - name: to
           in: query
-          description: Fin del rango (ISO 8601 CON zona). Por defecto, ahora
+          description: Fin del rango (ISO 8601 CON zona; sin zona da 422). Por defecto, ahora
           schema:
             type: string
             format: date-time
@@ -413,13 +423,13 @@ paths:
             $ref: '#/components/schemas/MetricKey'
         - name: from
           in: query
-          description: Inicio del rango (ISO 8601 CON zona). Por defecto, 24 h atras
+          description: Inicio del rango (ISO 8601 CON zona; sin zona da 422). Por defecto, 24 h atras
           schema:
             type: string
             format: date-time
         - name: to
           in: query
-          description: Fin del rango (ISO 8601 CON zona). Por defecto, ahora
+          description: Fin del rango (ISO 8601 CON zona; sin zona da 422). Por defecto, ahora
           schema:
             type: string
             format: date-time
@@ -486,13 +496,13 @@ paths:
       parameters:
         - name: from
           in: query
-          description: Inicio del periodo (ISO 8601 CON zona). Por defecto, 24 h atras
+          description: Inicio del periodo (ISO 8601 CON zona; sin zona da 422). Por defecto, 24 h atras
           schema:
             type: string
             format: date-time
         - name: to
           in: query
-          description: Fin del periodo (ISO 8601 CON zona). Por defecto, ahora
+          description: Fin del periodo (ISO 8601 CON zona; sin zona da 422). Por defecto, ahora
           schema:
             type: string
             format: date-time
@@ -2382,6 +2392,38 @@ components:
         detail:
           $ref: '#/components/schemas/Error'
 
+    HTTPValidationError:
+      type: object
+      description: |
+        Lo que responde FastAPI (con Pydantic v1) cuando un parametro o el
+        cuerpo no pasan su validacion: una lista en `detail`, con los mensajes
+        en ingles. No usa el formato `ErrorDetail` del backend.
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                description: Donde esta el error, por ejemplo `["query", "limit"]`
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string
+              ctx:
+                type: object
+                description: Datos extra del error (por ejemplo, los valores permitidos)
+            example:
+              loc: [query, metric]
+              msg: "value is not a valid enumeration member; permitted: 'temp_c', 'hum_aire_pct', 'suelo_pct', 'nivel_pct', 'luz_nivel'"
+              type: type_error.enum
+
   responses:
     BadRequest:
       description: Payload invalido
@@ -2417,18 +2459,29 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorDetail'
     ValidationError:
-      description: Cuerpo o parametros invalidos (validacion de FastAPI)
+      description: |
+        Cuerpo o parametros invalidos. Llega en una de dos formas:
+        - FastAPI (tipo, enum o rango numerico de un parametro o del cuerpo):
+          `detail` es una LISTA (`HTTPValidationError`), en ingles.
+        - Una regla del endpoint (por ejemplo `nothing_to_update` o
+          `not_controllable`): `detail` es `{error, message}` (`ErrorDetail`).
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorDetail'
+            oneOf:
+              - $ref: '#/components/schemas/ErrorDetail'
+              - $ref: '#/components/schemas/HTTPValidationError'
     InvalidRange:
       description: |
-        El rango pedido no se puede consultar (`invalid_range`): `from` igual
-        o posterior a `to`, mas de 90 dias, o un `bucket_seconds` que parte el
-        rango en mas de 1000 tramos. Un parametro con un valor fuera de su
-        enum o de su rango numerico lo rechaza FastAPI con su propio 422.
+        El rango pedido no se puede consultar (`invalid_range`, forma
+        `ErrorDetail`): `from` igual o posterior a `to`, mas de 90 dias,
+        `from` o `to` sin zona horaria, una fecha en los extremos del
+        calendario, o un `bucket_seconds` que parte el rango en mas de 1000
+        tramos. Un parametro con un valor fuera de su enum o de su rango
+        numerico lo rechaza FastAPI con su propio 422 (`HTTPValidationError`).
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorDetail'
+            oneOf:
+              - $ref: '#/components/schemas/ErrorDetail'
+              - $ref: '#/components/schemas/HTTPValidationError'

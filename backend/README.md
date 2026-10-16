@@ -109,7 +109,7 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/analysis` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.5.0).
+El contrato completo está en `../openapi.yaml` (v1.5.1).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -169,8 +169,10 @@ la alerta.
 ### Histórico y gráficas (DASH-02)
 
 Dos formas de leer lo mismo, las dos con el rango en `from` / `to` (ISO 8601
-**con zona**; sin ellos, las últimas 24 h; más de 90 días o un rango
-invertido → 422 `invalid_range`):
+**con zona**; sin ellos, las últimas 24 h). Un rango invertido, de más de 90
+días, con una fecha sin zona o en los extremos del calendario → 422
+`invalid_range` (sin zona se rechaza igual que en la ingesta: tomarla como UTC
+correría 6 h el rango de quien escribió su hora de México).
 
 | Endpoint | Qué devuelve |
 |---|---|
@@ -183,11 +185,23 @@ una gráfica. `/readings/series` devuelve las lecturas tal cual solo si caben
 en `max_points` (240 por defecto); si no, las promedia por bucket y cada
 punto trae además el **mínimo y el máximo reales** de ese bucket, para que
 promediar no esconda un pico. `bucket_seconds` dice de cuánto quedó el paso y
-`aggregated` si hubo que promediar.
+`aggregated` si hubo que promediar. **Nunca** devuelve más de `max_points`
+puntos, aunque las lecturas lleguen más seguido que cada 2 s.
 
 Los buckets se alinean con la época Unix (múltiplos exactos de su tamaño), no
 con el inicio del rango: dos consultas del mismo periodo caen en los mismos
-buckets, que es lo que hace reproducible el análisis de AI-01.
+buckets, que es lo que hace reproducible el análisis de AI-01. Por eso un
+rango de `n` buckets de largo toca `n + 1` (el primero y el último a medias):
+`choose_bucket()` cuenta ese de más, y `history.grid()` es la rejilla que
+cubre el rango completo — el análisis la usa para no dejar fuera el último
+bucket, que es el de las lecturas más nuevas.
+
+**Costo.** Agrupar por bucket obliga a SQLite a leer la hora de cada lectura:
+30 días son ~1.3 M lecturas y ~1–1.5 s por consulta en una laptop (más en la
+Pi), con la única conexión a la BD. Por eso la serie y el análisis hacen
+**una** consulta cada uno (la cuenta sale de sumar los buckets) y la página
+refresca los rangos largos más despacio (7 días cada 5 min, 30 días cada
+15 min).
 
 Un rango válido **sin lecturas no es un error**: responde 200 con
 `has_data: false` y `points: []`, para que la página muestre un aviso en vez
@@ -212,6 +226,9 @@ El cálculo vive en `app/analysis.py`, en funciones puras:
    sensor caído, no un cero), lo demás se promedia por bucket y los buckets
    sin lectura **no se rellenan**: se devuelven como `gaps`. Rellenar un
    hueco con el valor anterior inventaría una tendencia que nadie midió.
+   Los huecos se recortan al periodo pedido (dicen cuánto faltó DENTRO de
+   él) y el último bucket cuenta aunque vaya a medias: ahí están las
+   lecturas más nuevas.
 2. **Tendencia** (`trend`): mínimos cuadrados sobre esa serie. `stable` no es
    "pendiente cero": es que el cambio del periodo no pasa de `stable_band`,
    la banda de ruido de esa medición (`app/metrics.py`). Sin ella, una décima
@@ -334,11 +351,11 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-323 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+353 tests: ingesta (9), horas y validación parcial de la ingesta (24),
 login (22), roles (46, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (36), espejo de las constantes del firmware (5),
-riego (31), frontend (18), histórico y gráficas (22) y análisis (30).
+riego (31), frontend (18), histórico y gráficas (44) y análisis (38).
 
 La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
 

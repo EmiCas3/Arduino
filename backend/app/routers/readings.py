@@ -322,28 +322,27 @@ async def readings_series(
     since, until = history.ts_text(window.start), history.ts_text(window.end)
     bounds = (greenhouse_id, since, until)
 
-    cursor = await db.execute(
-        f"""
-        SELECT COUNT({column}) AS readings
-        FROM readings
-        WHERE greenhouse_id = ? AND ts >= ? AND ts < ?
-        """,
-        bounds,
-    )
-    reading_count = (await cursor.fetchone())["readings"]
-
+    # Una sola pasada sobre las lecturas en el caso caro (rangos largos): se
+    # agrupa directo y la cuenta sale de sumar los buckets. Antes se contaba
+    # primero con otra consulta, que en 30 días eran ~0.3 s más por refresco
+    # con la única conexión a la BD.
+    #
     # Se agrega según las lecturas que HAY, no según las que podría haber: un
     # rango de un mes con cuatro lecturas se dibuja con sus cuatro puntos.
-    bucket_seconds = 0 if reading_count <= max_points else history.choose_bucket(
-        window.span_seconds, max_points
-    )
-
-    if reading_count == 0:
-        points: List[SeriesPoint] = []
-    elif bucket_seconds == 0:
-        points = await _raw_points(db, column, bounds)
-    else:
+    bucket_seconds = history.choose_bucket(window.span_seconds, max_points)
+    points: List[SeriesPoint] = []
+    if bucket_seconds == 0:
+        # Rango corto: caben crudas si llega una cada 2 s. Se piden una de
+        # más para saber si llegaron más seguido y no caben.
+        points = await _raw_points(db, column, bounds, limit=max_points + 1)
+        if len(points) > max_points:
+            bucket_seconds = history.smallest_bucket_for(window, max_points)
+    if bucket_seconds > 0:
         points = await _bucket_points(db, definition, bucket_seconds, bounds)
+        if sum(point.count for point in points) <= max_points:
+            bucket_seconds = 0
+            points = await _raw_points(db, column, bounds)
+    reading_count = sum(point.count for point in points)
 
     lows = [point.min if point.min is not None else point.value for point in points]
     highs = [point.max if point.max is not None else point.value for point in points]
@@ -369,17 +368,21 @@ async def readings_series(
 
 
 async def _raw_points(
-    db: aiosqlite.Connection, column: str, bounds: tuple
+    db: aiosqlite.Connection, column: str, bounds: tuple, limit: int = -1
 ) -> List[SeriesPoint]:
-    """Las lecturas del rango, sin agregar (caben en `max_points`)."""
+    """Las lecturas del rango, sin agregar (caben en `max_points`).
+
+    `limit` corta la consulta (-1 = sin límite, como lo entiende SQLite).
+    """
     cursor = await db.execute(
         f"""
         SELECT ts, {column} AS value
         FROM readings
         WHERE greenhouse_id = ? AND ts >= ? AND ts < ? AND {column} IS NOT NULL
         ORDER BY ts
+        LIMIT ?
         """,
-        bounds,
+        (*bounds, limit),
     )
     return [
         SeriesPoint(ts=parse_utc(row["ts"]), value=row["value"], count=1)
