@@ -98,7 +98,7 @@ Campos nuevos en la línea JSON de siempre (cada 2 s):
 Ejemplo:
 
 ```json
-{"ms":148022,"temp_c":24.2,…,"bomba_habilitada":true,"bomba_activa":false,
+{"ms":148022,"temp_c":24.2,…,"co2_ppm":450,…,"bomba_habilitada":true,"bomba_activa":false,
  "vent":"BASE","vent_activo":false,"modo":"MANUAL","cmd_id":18,"cmd_err":null,
  "bomba_paro":"ORDEN","alertas":[],"estado":"OK"}
 ```
@@ -132,9 +132,9 @@ automático si la Pi calla N minutos queda para después).
   prueba_riego
   ```
 
-  Compila el `.ino` tal cual con un Arduino de mentira y revisa 29 casos
+  Compila el `.ino` tal cual con un Arduino de mentira y revisa 35 casos
   (automático, objetivo, mínimo de 10 s, descanso, tiempo máximo, manual,
-  tanque, cambio de modo, líneas raras).
+  tanque, cambio de modo, líneas raras y sensor de CO₂ I²C).
 
 - **Cadena completa con el simulador:** `python -m gateway simulate --seco`
   (la tierra arranca en el límite y a los pocos segundos el Arduino simulado

@@ -150,11 +150,11 @@ async def ingest_readings(
                     device_id, greenhouse_id, received_at, ts, ms,
                     temp_c, hum_aire_pct,
                     suelo_raw, suelo_pct, nivel_raw, nivel_pct,
-                    luz_raw, luz_nivel,
+                    luz_raw, luz_nivel, co2_ppm,
                     es_dia, sol_min_hoy, sol_min_prev,
                     riego_sugerido, bomba_habilitada, vent,
                     estado, alertas
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     device_id,
@@ -170,6 +170,7 @@ async def ingest_readings(
                     reading.nivel_pct,
                     reading.luz_raw,
                     reading.luz_nivel,
+                    reading.co2_ppm,
                     int(reading.es_dia) if reading.es_dia is not None else None,
                     reading.sol_min_hoy,
                     reading.sol_min_prev,

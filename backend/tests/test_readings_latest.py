@@ -34,7 +34,7 @@ def reading(ts: str, **overrides) -> dict:
     base = {
         "ts": ts, "ms": 1000, "temp_c": 24.2, "hum_aire_pct": 72.0,
         "suelo_raw": 380, "suelo_pct": 62, "nivel_raw": 150, "nivel_pct": 75,
-        "luz_raw": 306, "luz_nivel": 717, "es_dia": True, "sol_min_hoy": 42,
+        "luz_raw": 306, "luz_nivel": 717, "co2_ppm": 450, "es_dia": True, "sol_min_hoy": 42,
         "sol_min_prev": None, "riego_sugerido": False, "bomba_habilitada": True,
         "vent": "BASE", "estado": "OK", "alertas": [],
     }
@@ -73,7 +73,7 @@ async def test_latest_values_with_units(api, tokens):
     assert temp["device_location"] == "Mesa de pruebas"
 
     assert {m["key"] for m in data["metrics"]} == {
-        "temp_c", "hum_aire_pct", "suelo_pct", "nivel_pct", "luz_nivel"}
+        "temp_c", "hum_aire_pct", "suelo_pct", "nivel_pct", "luz_nivel", "co2_ppm"}
 
 
 @pytest.mark.asyncio

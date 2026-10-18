@@ -56,9 +56,14 @@ class AlertaEnum(str, Enum):
     TANQUE_UN_CUARTO = "TANQUE_UN_CUARTO"
     SOMBRA_PROLONGADA = "SOMBRA_PROLONGADA"
     SOL_INSUFICIENTE = "SOL_INSUFICIENTE"
+    CO2_ALTO = "CO2_ALTO"
+    CO2_BAJO = "CO2_BAJO"
+    CO2_ALTO_LEVE = "CO2_ALTO_LEVE"
+    CO2_BAJO_LEVE = "CO2_BAJO_LEVE"
     FALLA_DHT = "FALLA_DHT"
     FALLA_SUELO = "FALLA_SUELO"
     FALLA_NIVEL = "FALLA_NIVEL"
+    FALLA_CO2 = "FALLA_CO2"
 
 
 # ── Reading ────────────────────────────────────────────────────────────
@@ -102,6 +107,9 @@ class Reading(BaseModel):
     # Luz
     luz_raw: Optional[int] = Field(None, ge=0, le=1023)
     luz_nivel: Optional[int] = Field(None, ge=0, le=1023)
+
+    # CO2 (SCD40 / SCD41 por I2C)
+    co2_ppm: Optional[int] = Field(None, ge=0, le=40000)
 
     # Ciclo de luz
     es_dia: Optional[bool] = None
@@ -645,6 +653,7 @@ class MetricKey(str, Enum):
     suelo_pct = "suelo_pct"
     nivel_pct = "nivel_pct"
     luz_nivel = "luz_nivel"
+    co2_ppm = "co2_ppm"
 
 
 class SeriesPoint(BaseModel):

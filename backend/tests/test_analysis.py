@@ -53,7 +53,7 @@ def series(start: datetime, count: int, step_seconds: int, value_at, **fixed):
     return [
         {"ts": start + timedelta(seconds=step_seconds * i),
          "temp_c": value_at(i), "hum_aire_pct": 70.0, "suelo_pct": 62,
-         "nivel_pct": 75, "luz_nivel": 700, **fixed}
+         "nivel_pct": 75, "luz_nivel": 700, "co2_ppm": 450, **fixed}
         for i in range(count)
     ]
 

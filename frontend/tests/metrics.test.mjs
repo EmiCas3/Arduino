@@ -117,7 +117,8 @@ test("todas las alertas del contrato tienen tarjeta, severidad y texto", () => {
     "HUM_AIRE_ALTA", "HUM_AIRE_BAJA", "HUM_AIRE_ALTA_LEVE", "HUM_AIRE_BAJA_LEVE",
     "SUELO_ENCHARCADO", "SUELO_SECO", "SUELO_HUMEDO_LEVE", "SUELO_SECO_LEVE",
     "TANQUE_MITAD", "TANQUE_UN_CUARTO", "SOMBRA_PROLONGADA", "SOL_INSUFICIENTE",
-    "FALLA_DHT", "FALLA_SUELO", "FALLA_NIVEL",
+    "CO2_ALTO", "CO2_BAJO", "CO2_ALTO_LEVE", "CO2_BAJO_LEVE",
+    "FALLA_DHT", "FALLA_SUELO", "FALLA_NIVEL", "FALLA_CO2",
   ];
   assert.deepEqual(Object.keys(ALERTS).sort(), [...contract].sort());
   for (const code of contract) {
@@ -153,13 +154,14 @@ test("formato de valores", () => {
   assert.equal(formatValue(metric({ value: 24 })), "24.0");                       // temperatura: 1 decimal
   assert.equal(formatValue(metric({ key: "suelo_pct", value: 62 })), "62");
   assert.equal(formatValue(metric({ key: "luz_nivel", value: 717 })), "717");
+  assert.equal(formatValue(metric({ key: "co2_ppm", value: 450 })), "450");
 });
 
 test("una métrica nueva de la API usa su propia etiqueta y unidad", () => {
-  const co2 = { key: "co2_ppm", label: "CO₂", unit: "ppm", value: 415.25 };
-  assert.equal(presentationFor(co2).label, "CO₂");
-  assert.equal(presentationFor(co2).unit, "ppm");
-  assert.equal(formatValue(co2), "415.3");
+  const ph = { key: "ph_suelo", label: "pH de la tierra", unit: "pH", value: 6.45 };
+  assert.equal(presentationFor(ph).label, "pH de la tierra");
+  assert.equal(presentationFor(ph).unit, "pH");
+  assert.equal(formatValue(ph), "6.5");
 });
 
 test("resumen de la última lectura del Arduino", () => {

@@ -42,6 +42,8 @@ SUELO_IDEAL = (60, 65)
 SUELO_LIMITE = (50, 80)
 NIVEL_PCT_AVISO, NIVEL_PCT_CRITICO = 50, 25
 LUZ_UMBRAL_DIA, LUZ_UMBRAL_SOL = 250, 600
+CO2_IDEAL = (400, 1000)
+CO2_LIMITE = (300, 1500)
 # Cada lectura simulada son 2 s del Arduino (INTERVALO_MS del firmware), aunque
 # --interval las mande más rápido: así --interval 0.5 es un time-lapse (x4) y
 # los tiempos de riego cuadran con la "física de juguete", que va por lectura.
@@ -58,7 +60,7 @@ def a_porcentaje(crudo: int, en_cero: int, en_cien: int) -> int:
     return max(0, min(100, p))
 
 
-def evaluar(temp, hum, suelo_pct, nivel_pct) -> List[str]:
+def evaluar(temp, hum, suelo_pct, nivel_pct, co2_ppm=450) -> List[str]:
     """Las mismas reglas de alertas que evaluar*() del firmware."""
     alertas = []
     if temp is None:
@@ -99,12 +101,24 @@ def evaluar(temp, hum, suelo_pct, nivel_pct) -> List[str]:
         alertas.append("TANQUE_UN_CUARTO")
     elif nivel_pct <= NIVEL_PCT_AVISO:
         alertas.append("TANQUE_MITAD")
+
+    if co2_ppm is None:
+        alertas.append("FALLA_CO2")
+    elif co2_ppm > CO2_LIMITE[1]:
+        alertas.append("CO2_ALTO")
+    elif co2_ppm < CO2_LIMITE[0]:
+        alertas.append("CO2_BAJO")
+    elif co2_ppm > CO2_IDEAL[1]:
+        alertas.append("CO2_ALTO_LEVE")
+    elif co2_ppm < CO2_IDEAL[0]:
+        alertas.append("CO2_BAJO_LEVE")
     return alertas
 
 
 GRAVES = {
     "FALLA_DHT", "TEMP_ALTA", "TEMP_BAJA", "HUM_AIRE_ALTA", "HUM_AIRE_BAJA",
     "FALLA_SUELO", "SUELO_ENCHARCADO", "SUELO_SECO", "FALLA_NIVEL", "TANQUE_UN_CUARTO",
+    "FALLA_CO2", "CO2_ALTO", "CO2_BAJO",
 }
 
 
@@ -234,6 +248,10 @@ class SimulatedArduino:
         if es_dia and luz_nivel >= LUZ_UMBRAL_SOL:
             self.sol_ms += STEP_MS
 
+        co2_ppm: Optional[int] = int((460 if es_dia_real else 560) + rng.gauss(0, 12))
+        if self.failures and rng.random() < 0.02:
+            co2_ppm = None
+
         suelo_ok = SUELO_MIN_VALIDO <= suelo_raw <= SUELO_MAX_VALIDO
         suelo_pct = a_porcentaje(suelo_raw, SUELO_EN_AIRE, SUELO_EN_AGUA) if suelo_ok else None
         nivel_pct = a_porcentaje(nivel_raw, NIVEL_VACIO, NIVEL_LLENO)
@@ -244,7 +262,7 @@ class SimulatedArduino:
         self._controlar_bomba(suelo_pct, riego_sugerido, bomba_habilitada)
         vent_alta = (temp is not None and temp > TEMP_IDEAL[1]) or (hum is not None and hum > HUMA_IDEAL[1])
 
-        alertas = evaluar(temp, hum, suelo_pct, nivel_pct)
+        alertas = evaluar(temp, hum, suelo_pct, nivel_pct, co2_ppm)
         estado = "OK" if not alertas else ("ALERTA" if GRAVES & set(alertas) else "AVISO")
         line = {
             "ms": self.ms,
@@ -256,6 +274,7 @@ class SimulatedArduino:
             "nivel_pct": nivel_pct,
             "luz_raw": 1023 - luz_nivel,      # LUZ_INVERTIDA
             "luz_nivel": luz_nivel,
+            "co2_ppm": co2_ppm,
             "es_dia": es_dia,
             "sol_min_hoy": self.sol_ms // 60000,
             "sol_min_prev": None,

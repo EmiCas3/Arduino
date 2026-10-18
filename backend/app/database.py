@@ -67,6 +67,7 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
             nivel_pct        INTEGER,
             luz_raw          INTEGER,
             luz_nivel        INTEGER,
+            co2_ppm          INTEGER,
             es_dia           INTEGER,
             sol_min_hoy      INTEGER,
             sol_min_prev     INTEGER,
@@ -245,6 +246,10 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
         CREATE INDEX IF NOT EXISTS ix_events_greenhouse
             ON actuator_events(greenhouse_id, reading_ts);
     """)
+    cursor = await _db.execute("PRAGMA table_info(readings)")
+    existing_columns = {row["name"] for row in await cursor.fetchall()}
+    if "co2_ppm" not in existing_columns:
+        await _db.execute("ALTER TABLE readings ADD COLUMN co2_ppm INTEGER")
     await _db.commit()
     return _db
 

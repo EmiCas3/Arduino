@@ -1300,6 +1300,17 @@ components:
             backend no necesite saber la polaridad del sensor.
           example: 717
 
+        co2_ppm:
+          type: integer
+          minimum: 0
+          maximum: 40000
+          nullable: true
+          description: |
+            Concentracion de CO2 en partes por millon (ppm) medida por el sensor
+            Sensirion SCD40/SCD41 en el bus I2C (0x62, pines A4/A5). `null` si
+            el sensor no responde, falla su CRC o el dato tiene mas de 15 s.
+          example: 450
+
         es_dia:
           type: boolean
           description: |
@@ -1403,9 +1414,14 @@ components:
               - TANQUE_UN_CUARTO
               - SOMBRA_PROLONGADA
               - SOL_INSUFICIENTE
+              - CO2_ALTO
+              - CO2_BAJO
+              - CO2_ALTO_LEVE
+              - CO2_BAJO_LEVE
               - FALLA_DHT
               - FALLA_SUELO
               - FALLA_NIVEL
+              - FALLA_CO2
           example: [SUELO_SECO, TANQUE_MITAD]
 
     StoredReading:
@@ -1648,7 +1664,7 @@ components:
       properties:
         key:
           type: string
-          enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct, luz_nivel]
+          enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct, luz_nivel, co2_ppm]
         label:
           type: string
           example: Temperatura del aire
@@ -2055,7 +2071,7 @@ components:
           example: general
         metric:
           type: string
-          enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct]
+          enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct, co2_ppm]
           description: Sensor (campo de la lectura)
         label:
           type: string
@@ -2147,7 +2163,7 @@ components:
       description: |
         Mediciones que se pueden graficar y analizar. Es el mismo catalogo
         que usan las ultimas lecturas y las alertas.
-      enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct, luz_nivel]
+      enum: [temp_c, hum_aire_pct, suelo_pct, nivel_pct, luz_nivel, co2_ppm]
       default: temp_c
 
     SeriesPoint:

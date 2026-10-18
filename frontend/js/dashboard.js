@@ -67,7 +67,7 @@ export function mountLiveReadings(root, greenhouseId) {
   const summary = h("div", { class: "reading-summary" });
   const notice = h("div", { class: "live-notice" });
   const grid = h("div", { class: "metrics" },
-    Array.from({ length: 5 }, () => h("div", { class: "metric metric-loading", "aria-hidden": "true" },
+    Array.from({ length: 6 }, () => h("div", { class: "metric metric-loading", "aria-hidden": "true" },
       h("div", { class: "skeleton-line", style: "width:60%" }),
       h("div", { class: "skeleton-line", style: "width:40%;height:28px" }),
       h("div", { class: "skeleton-line", style: "width:75%" }))));

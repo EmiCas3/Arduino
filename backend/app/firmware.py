@@ -34,6 +34,8 @@ CONSTANTS: Dict[str, float] = {
     "SUELO_LIMITE_MIN": 50,
     "SUELO_LIMITE_MAX": 80,
     "NIVEL_PCT_CRITICO": 25,
+    "CO2_LIMITE_MIN": 300,
+    "CO2_LIMITE_MAX": 1500,
     # Riego (ACT-02): el objetivo es SUELO_LIMITE_MIN
     "BOMBA_MAX_MS": 60_000,
     "BOMBA_DESCANSO_MS": 300_000,
@@ -65,15 +67,18 @@ LIMIT_ALERTS: Dict[str, LimitAlert] = {
         LimitAlert("SUELO_ENCHARCADO", "suelo_pct", "high", "SUELO_LIMITE_MAX", ">"),
         LimitAlert("SUELO_SECO", "suelo_pct", "low", "SUELO_LIMITE_MIN", "<"),
         LimitAlert("TANQUE_UN_CUARTO", "nivel_pct", "low", "NIVEL_PCT_CRITICO", "<="),
+        LimitAlert("CO2_ALTO", "co2_ppm", "high", "CO2_LIMITE_MAX", ">"),
+        LimitAlert("CO2_BAJO", "co2_ppm", "low", "CO2_LIMITE_MIN", "<"),
     )
 }
 
 # Mediciones que pueden tener alerta, en el orden en que se evalúan.
-ALERT_METRICS: Tuple[str, ...] = ("temp_c", "hum_aire_pct", "suelo_pct", "nivel_pct")
+ALERT_METRICS: Tuple[str, ...] = ("temp_c", "hum_aire_pct", "suelo_pct", "nivel_pct", "co2_ppm")
 
 # Códigos de falla y las mediciones que dejan sin dato confiable.
 FAULT_CODES: Dict[str, Tuple[str, ...]] = {
     "FALLA_DHT": ("temp_c", "hum_aire_pct"),
     "FALLA_SUELO": ("suelo_pct",),
     "FALLA_NIVEL": ("nivel_pct",),
+    "FALLA_CO2": ("co2_ppm",),
 }

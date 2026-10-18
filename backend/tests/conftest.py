@@ -117,7 +117,7 @@ async def tokens(api):
 
 READING_COLUMNS = (
     "ms", "temp_c", "hum_aire_pct", "suelo_raw", "suelo_pct", "nivel_raw",
-    "nivel_pct", "luz_raw", "luz_nivel", "es_dia", "sol_min_hoy",
+    "nivel_pct", "luz_raw", "luz_nivel", "co2_ppm", "es_dia", "sol_min_hoy",
     "sol_min_prev", "riego_sugerido", "bomba_habilitada", "vent", "estado",
     "alertas",
 )

@@ -55,6 +55,7 @@ def ramp(count: int, *, step_seconds: int, end: datetime, first: float, rise: fl
             "nivel_raw": 150,
             "luz_nivel": 700,
             "luz_raw": 323,
+            "co2_ppm": 450,
             "estado": "OK",
         }
         for i in range(count)
@@ -386,7 +387,7 @@ async def test_a_long_range_with_few_readings_is_still_raw(api, db, tokens):
 @pytest.mark.asyncio
 async def test_an_unknown_metric_is_rejected(api, tokens):
     """Caso 13: solo se grafican las mediciones del catálogo."""
-    resp = await api.get(SERIES_URL, params={"metric": "co2_ppm"},
+    resp = await api.get(SERIES_URL, params={"metric": "ph_suelo"},
                          headers=bearer(tokens["producer"]))
     assert resp.status_code == 422
 

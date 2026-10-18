@@ -27,6 +27,7 @@ export const METRICS = {
   suelo_pct: { label: "Humedad de la tierra", unit: "%", icon: "soil", decimals: 0, reference: "ideal 60–65 %" },
   nivel_pct: { label: "Nivel del tanque", unit: "%", icon: "drop", decimals: 0, reference: "0 % vacío · 100 % lleno" },
   luz_nivel: { label: "Luz", unit: "de 1023", icon: "sun", decimals: 0, reference: "más alto = más luz" },
+  co2_ppm: { label: "CO₂", unit: "ppm", icon: "co2", decimals: 0, reference: "ideal 400–1000 ppm" },
 };
 
 /**
@@ -52,9 +53,14 @@ export const ALERTS = {
   TANQUE_MITAD: { keys: ["nivel_pct"], level: "warn", text: "Nivel de agua bajo" },
   SOMBRA_PROLONGADA: { keys: ["luz_nivel"], level: "warn", text: "Mucho rato sin sol pleno" },
   SOL_INSUFICIENTE: { keys: ["luz_nivel"], level: "warn", text: "El día cerró con poco sol" },
+  CO2_ALTO: { keys: ["co2_ppm"], level: "crit", text: "CO₂ muy alto" },
+  CO2_BAJO: { keys: ["co2_ppm"], level: "crit", text: "CO₂ muy bajo" },
+  CO2_ALTO_LEVE: { keys: ["co2_ppm"], level: "warn", text: "CO₂ un poco alto" },
+  CO2_BAJO_LEVE: { keys: ["co2_ppm"], level: "warn", text: "CO₂ un poco bajo" },
   FALLA_DHT: { keys: ["temp_c", "hum_aire_pct"], level: "down", text: "El sensor no responde" },
   FALLA_SUELO: { keys: ["suelo_pct"], level: "down", text: "El sensor no responde" },
   FALLA_NIVEL: { keys: ["nivel_pct"], level: "down", text: "El sensor no responde" },
+  FALLA_CO2: { keys: ["co2_ppm"], level: "down", text: "El sensor no responde" },
 };
 
 export const STATE_LABELS = {

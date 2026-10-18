@@ -31,7 +31,7 @@ CONST_RE = re.compile(
 # else if (t > TEMP_LIMITE_MAX)
 #   alerta(F("TEMP_ALTA"), ALERTA);
 CHECK_RE = re.compile(
-    r"if\s*\(\s*\w+\s*([<>]=?)\s*([A-Z_]+)\s*\)\s*alerta\(F\(\"([A-Z_]+)\"\),\s*(ALERTA|AVISO)\)"
+    r"if\s*\(\s*\w+\s*([<>]=?)\s*([A-Z0-9_]+)\s*\)\s*alerta\(F\(\"([A-Z0-9_]+)\"\),\s*(ALERTA|AVISO)\)"
 )
 
 

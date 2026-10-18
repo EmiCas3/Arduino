@@ -8,11 +8,14 @@
 // Compila el .ino tal cual, sin copiarlo.
 #include "Arduino.h"
 #include "DHT.h"
+#include "Wire.h"
 unsigned long fake_ms = 0;
 int fake_analog[32];
 int fake_pins[32];
 float fake_temp = 23, fake_hum = 70;
+int fake_co2 = 450;
 FakeSerial Serial;
+FakeWire Wire;
 #include "../vivero_sensoresV2/vivero_sensoresV2.ino"
 
 static int fails = 0;
@@ -36,6 +39,7 @@ int main() {
   setup();
   step();
   CHECK(has("\"modo\":\"AUTO\"") && has("\"cmd_id\":0") && has("\"cmd_err\":null") && has("\"bomba_paro\":null"), "arranca en AUTO, cmd_id 0");
+  CHECK(has("\"co2_ppm\":450"), "lee CO2 en ppm por I2C (SCD4x)");
   CHECK(!pump(), "tierra al 62 %: bomba apagada");
 
   // AUTO: tierra seca -> riega sola, para al llegar al objetivo (50 %)
@@ -123,6 +127,19 @@ int main() {
   CHECK(pump(), "AUTO regando");
   fake_analog[A0] = 20; step();
   CHECK(!pump() && has("\"bomba_paro\":\"SENSOR\""), "falla el sensor de suelo: apaga (SENSOR)");
+
+  // alertas y fallas de CO2 (SCD4x por I2C en A4/A5)
+  fake_analog[A0] = sueloRawPara(62);
+  fake_co2 = 1600; step();
+  CHECK(has("\"co2_ppm\":1600") && has("\"CO2_ALTO\""), "CO2 > 1500 ppm: CO2_ALTO");
+  fake_co2 = 1200; step();
+  CHECK(has("\"co2_ppm\":1200") && has("\"CO2_ALTO_LEVE\""), "CO2 > 1000 ppm: CO2_ALTO_LEVE");
+  fake_co2 = 250; step();
+  CHECK(has("\"co2_ppm\":250") && has("\"CO2_BAJO\""), "CO2 < 300 ppm: CO2_BAJO");
+  fake_co2 = -1; step();
+  CHECK(has("\"co2_ppm\":null") && has("\"FALLA_CO2\""), "sensor CO2 desconectado: null + FALLA_CO2");
+  fake_co2 = 450; step();
+  CHECK(has("\"co2_ppm\":450") && !has("FALLA_CO2"), "sensor CO2 reconectado: recupera lectura");
 
   printf("\nlinea de ejemplo: %s", lastLine.c_str());
   printf("%s\n", fails ? "HAY FALLAS" : "TODO OK");

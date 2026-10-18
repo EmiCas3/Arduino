@@ -48,6 +48,7 @@ METRICS: Tuple[Metric, ...] = (
     Metric("suelo_pct", "Humedad de la tierra", "%", "suelo_raw", 0, 2.0),
     Metric("nivel_pct", "Nivel del tanque", "%", "nivel_raw", 0, 2.0),
     Metric("luz_nivel", "Luz", "nivel 0-1023", "luz_raw", 0, 25.0),
+    Metric("co2_ppm", "CO₂", "ppm", None, 0, 30.0),
 )
 
 BY_KEY: Dict[str, Metric] = {metric.key: metric for metric in METRICS}
