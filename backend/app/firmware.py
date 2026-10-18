@@ -17,6 +17,9 @@ un LÍMITE (decisión D1 del plan). Los avisos (`*_LEVE`, `TANQUE_MITAD`,
 `SOMBRA_PROLONGADA`, `SOL_INSUFICIENTE`) siguen pintando las tarjetas, sin
 crear alerta. Las fallas (`FALLA_*`) dicen que el sensor no respondió: no
 son un cruce de umbral.
+
+El CO₂ (NF-01, sensor SCD40/SCD41) sigue las mismas reglas: `CO2_ALTO` y
+`CO2_BAJO` crean alerta; `CO2_*_LEVE` son avisos y `FALLA_CO2` es una falla.
 """
 
 from dataclasses import dataclass

@@ -7,6 +7,13 @@ La BD se crea en backend/smartgreenai.db por defecto.
 No hay herramienta de migraciones: las tablas se crean con
 CREATE TABLE IF NOT EXISTS, que NO altera tablas que ya existen. Por eso los
 items nuevos solo AGREGAN tablas e índices; devices y readings no se tocan.
+
+Única excepción (NF-01, decisión D1 del plan): la columna `co2_ppm` de
+readings. Una BD creada antes del CO₂ (la de la Pi) la gana al arrancar con
+un ALTER TABLE … ADD COLUMN que acepta null: corre una sola vez (revisa
+PRAGMA table_info), en SQLite es instantáneo aunque haya millones de
+lecturas, y las lecturas viejas quedan con co2_ppm = null. El código lee las
+columnas por nombre, así que no importa que en esa BD quede al final.
 """
 
 from typing import Optional
@@ -246,6 +253,7 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
         CREATE INDEX IF NOT EXISTS ix_events_greenhouse
             ON actuator_events(greenhouse_id, reading_ts);
     """)
+    # NF-01: la BD de la Pi se creó antes del CO₂ (ver la nota de arriba).
     cursor = await _db.execute("PRAGMA table_info(readings)")
     existing_columns = {row["name"] for row in await cursor.fetchall()}
     if "co2_ppm" not in existing_columns:

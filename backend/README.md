@@ -149,8 +149,10 @@ firmware ordenó en el pin: no mide si el motor gira.
 
 Los umbrales del rábano viven en el firmware (`vivero_sensoresV2.ino`): el
 Arduino compara cada lectura y manda códigos. `app/alerts.py` convierte los
-**7 códigos de límite** en alertas con historia (`app/firmware.py` dice a qué
-sensor y umbral corresponde cada uno):
+**9 códigos de límite** en alertas con historia (`app/firmware.py` dice a qué
+sensor y umbral corresponde cada uno): `TEMP_ALTA/BAJA`, `HUM_AIRE_ALTA/BAJA`,
+`SUELO_ENCHARCADO/SECO`, `TANQUE_UN_CUARTO` y, desde NF-01, `CO2_ALTO/BAJO`
+(límites 1500 y 300 ppm):
 
 - Se **crea** en la misma petición de ingesta (cuando el gateway recibe el
   202, ya existe) con sensor, dispositivo, valor, umbral y hora.
@@ -351,11 +353,13 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-353 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+381 tests: ingesta (9), horas y validación parcial de la ingesta (24),
 login (22), roles (46, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
-actuadores (18), alertas (36), espejo de las constantes del firmware (5),
-riego (31), frontend (18), histórico y gráficas (44) y análisis (38).
+actuadores (18), alertas (41), espejo de las constantes del firmware (5),
+riego (31), frontend (18), histórico y gráficas (44), análisis (38) y sensor
+de CO₂ (23, `test_co2.py`: ingesta, alertas, dashboard y la BD vieja de la
+Pi que gana la columna).
 
 La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
 
@@ -401,7 +405,7 @@ backend/
 | Tabla | Item | Notas |
 |---|---|---|
 | `devices` | MON-04 | Sin cambios |
-| `readings` | MON-04 | Sin cambios. El índice `(greenhouse_id, ts)` sirve a DASH-01 y a las consultas por rango de DASH-02 / AI-01 |
+| `readings` | MON-04 | El índice `(greenhouse_id, ts)` sirve a DASH-01 y a las consultas por rango de DASH-02 / AI-01. **NF-01 agrega `co2_ppm`** (ppm, `null` = sensor caído): en una BD de antes del CO₂, `init_db()` la agrega con `ALTER TABLE … ADD COLUMN` una sola vez; es la única columna que se ha agregado a una tabla existente |
 | `users` | AUTH-01 | `role` ∈ producer / admin / super_admin; `greenhouse_id` = vivero asignado |
 | `sessions` | AUTH-01 | Timeout por inactividad, logout y revocación |
 | `actuators` | CONF-05 | Desactivar = `status='inactive'`; no hay DELETE |

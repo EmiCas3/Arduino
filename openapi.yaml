@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.5.1
+  version: 1.6.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -59,6 +59,16 @@ info:
     `max_points` puntos. El 422 documenta las dos formas reales: la de FastAPI
     (`HTTPValidationError`) y la del backend (`ErrorDetail`). `/readings`
     declara el header `X-SG-Background`. Sin rutas ni campos nuevos.
+
+    **v1.6.0 (Sprint 3, NF-01):** sensor de CO2 (Sensirion SCD40/SCD41 por
+    I2C). La lectura trae `co2_ppm` (entero, ppm, `null` si el sensor no
+    responde) y cinco codigos nuevos en `alertas`: `CO2_ALTO` y `CO2_BAJO`
+    (limite, crean alerta), `CO2_ALTO_LEVE` y `CO2_BAJO_LEVE` (avisos) y
+    `FALLA_CO2`. Los umbrales viven en el firmware (`CO2_LIMITE_MIN/MAX`,
+    300 y 1500 ppm). `co2_ppm` tambien sale en las ultimas lecturas, en
+    `/readings`, en `/readings/series` (`metric=co2_ppm`), en el analisis y
+    como `metric` de las alertas. Sin rutas nuevas. Compatible hacia atras:
+    una lectura sin `co2_ppm` se sigue aceptando.
 
     ## Convenciones que no se negocian
 
@@ -2437,7 +2447,7 @@ components:
                 description: Datos extra del error (por ejemplo, los valores permitidos)
             example:
               loc: [query, metric]
-              msg: "value is not a valid enumeration member; permitted: 'temp_c', 'hum_aire_pct', 'suelo_pct', 'nivel_pct', 'luz_nivel'"
+              msg: "value is not a valid enumeration member; permitted: 'temp_c', 'hum_aire_pct', 'suelo_pct', 'nivel_pct', 'luz_nivel', 'co2_ppm'"
               type: type_error.enum
 
   responses:

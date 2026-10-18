@@ -120,7 +120,7 @@ async def test_series_honours_an_explicit_range(api, db, tokens):
 
 @pytest.mark.asyncio
 async def test_every_metric_of_the_catalog_can_be_graphed(api, db, tokens):
-    """Caso 4: las cinco mediciones del catálogo responden con su unidad."""
+    """Caso 4: las seis mediciones del catálogo (con el CO₂ de NF-01) responden con su unidad."""
     await insert_readings(db, ramp(5, step_seconds=2, end=minutes_ago(1),
                                    first=21.0, rise=0.1))
     for metric in metric_catalog.METRICS:

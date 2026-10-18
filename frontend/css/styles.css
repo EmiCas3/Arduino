@@ -852,10 +852,19 @@ code, .mono {
 .pill-warn { background: var(--warn-soft); color: var(--warn); }
 .pill-crit { background: var(--crit-soft); color: var(--crit); }
 
+/* Seis sensores (con el CO₂ de NF-01): 3 + 3 en escritorio, 2 + 2 + 2 en
+   tableta y uno por fila en celular. Con columnas automáticas quedaban 5 + 1:
+   el CO₂ solo en una segunda fila. */
 .metrics {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 1020px) {
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .metrics { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Una tarjeta por sensor. El estado va en data-state y se comunica con

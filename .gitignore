@@ -42,6 +42,7 @@ gateway/.env
 gateway/buffer.db*
 PLAN_Sprint2_Cierre.md
 PLAN_Sprint3_Correcciones.md
+PLAN_NF-01_CO2.md
 
 # Configuración local de la app de Claude (rutas de cada máquina)
 .claude/

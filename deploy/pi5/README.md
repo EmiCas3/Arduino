@@ -128,9 +128,9 @@ Al final debe decir:
 
 2. En el navegador de la laptop abre `http://smartgreen.local:8000` (o con la
    IP), entra como `productor` / `Rabano2026!`. En "Mi vivero" deben verse las
-   5 tarjetas (temperatura, humedad del aire, humedad de la tierra, nivel del
-   tanque y luz) con su valor, "hace N s" y su estado, y cambiar solas cada
-   15 s. En `http://smartgreen.local:8000/docs` está la API.
+   6 tarjetas (temperatura, humedad del aire, humedad de la tierra, nivel del
+   tanque, luz y CO₂) con su valor, "hace N s" y su estado, y cambiar solas
+   cada 15 s. En `http://smartgreen.local:8000/docs` está la API.
 
 > **Si la Pi se instaló antes de DASH-01**, su `backend/.env` no tiene el
 > ajuste de "dato viejo" (`install.sh` no toca un `.env` que ya existe).

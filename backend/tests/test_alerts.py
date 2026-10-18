@@ -40,6 +40,8 @@ OUTSIDE = {
     "SUELO_ENCHARCADO": ("suelo_pct", 88),
     "SUELO_SECO": ("suelo_pct", 31),
     "TANQUE_UN_CUARTO": ("nivel_pct", 20),
+    "CO2_ALTO": ("co2_ppm", 1650),
+    "CO2_BAJO": ("co2_ppm", 250),
 }
 
 
@@ -123,6 +125,12 @@ async def test_alert_exists_when_ingest_returns(api, db):
     assert saved[0]["reading_ts"] == stored(0)
 
 
+def test_every_limit_code_of_the_firmware_is_tested():
+    """Un código de límite nuevo en app/firmware.py (como los de CO₂ de NF-01)
+    tiene que entrar en OUTSIDE para que el test de abajo lo cubra."""
+    assert set(OUTSIDE) == set(LIMIT_ALERTS)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("code", sorted(OUTSIDE))
 async def test_each_limit_code_maps_to_its_sensor(api, db, code):
@@ -145,6 +153,7 @@ async def test_independent_sensors_get_their_own_alert(api, db):
 @pytest.mark.parametrize("code", [
     "TEMP_ALTA_LEVE", "HUM_AIRE_BAJA_LEVE", "SUELO_SECO_LEVE", "SUELO_HUMEDO_LEVE",
     "TANQUE_MITAD", "SOMBRA_PROLONGADA", "SOL_INSUFICIENTE",
+    "CO2_ALTO_LEVE", "CO2_BAJO_LEVE",
 ])
 async def test_avisos_do_not_create_alerts(api, db, code):
     """D1: los avisos pintan la tarjeta, pero no son alertas."""
@@ -154,8 +163,8 @@ async def test_avisos_do_not_create_alerts(api, db, code):
 
 @pytest.mark.asyncio
 async def test_sensor_failures_do_not_create_alerts(api, db):
-    await ingest(api, reading(0, "FALLA_DHT", "FALLA_SUELO", temp_c=None, hum_aire_pct=None,
-                              suelo_pct=None))
+    await ingest(api, reading(0, "FALLA_DHT", "FALLA_SUELO", "FALLA_CO2", temp_c=None,
+                              hum_aire_pct=None, suelo_pct=None, co2_ppm=None))
     assert await rows(db) == []
 
 
