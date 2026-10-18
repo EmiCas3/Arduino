@@ -14,6 +14,7 @@ int fake_analog[32];
 int fake_pins[32];
 float fake_temp = 23, fake_hum = 70;
 int fake_co2 = 450;
+bool fake_scd_running = false;
 FakeSerial Serial;
 FakeWire Wire;
 #include "../vivero_sensoresV2/vivero_sensoresV2.ino"
@@ -34,9 +35,22 @@ void send(const char *line) { for (const char *p = line; *p; ++p) Serial.in.push
 bool has(const char *s) { return lastLine.find(s) != std::string::npos; }
 bool pump() { return fake_pins[5] == HIGH; }
 
+// Reinicio del Uno (la Pi abre el puerto USB): la memoria vuelve a empezar y
+// millis() a 0, pero el SCD4x no pierde la corriente.
+void reiniciarArduino() {
+  fake_ms = 0;
+  ultimaLectura = 0;
+  co2Iniciado = false;
+  co2TieneLectura = false;
+  co2UltimoMs = 0;
+  co2Ppm = -1;
+  setup();
+}
+
 int main() {
   fake_analog[A0] = sueloRawPara(62); fake_analog[A1] = 120; fake_analog[A2] = 300;
   setup();
+  CHECK(Wire.timeout_us == 25000 && Wire.timeout_reset, "bus I2C con tiempo limite: un falso contacto no congela el loop");
   step();
   CHECK(has("\"modo\":\"AUTO\"") && has("\"cmd_id\":0") && has("\"cmd_err\":null") && has("\"bomba_paro\":null"), "arranca en AUTO, cmd_id 0");
   CHECK(has("\"co2_ppm\":450"), "lee CO2 en ppm por I2C (SCD4x)");
@@ -140,6 +154,27 @@ int main() {
   CHECK(has("\"co2_ppm\":null") && has("\"FALLA_CO2\""), "sensor CO2 desconectado: null + FALLA_CO2");
   fake_co2 = 450; step();
   CHECK(has("\"co2_ppm\":450") && !has("FALLA_CO2"), "sensor CO2 reconectado: recupera lectura");
+
+  // el SCD4x sigue midiendo pero el firmware le vuelve a pedir start (NACK):
+  // le manda stop y en la siguiente vuelta start funciona
+  co2Iniciado = false; fake_scd_running = true; step();
+  CHECK(has("\"co2_ppm\":null"), "start rechazado (ya media): esa vuelta va null");
+  step();
+  CHECK(has("\"co2_ppm\":450") && !has("FALLA_CO2"), "stop + start en la vuelta siguiente: vuelve el CO2");
+
+  // reinicio del Uno con el SCD4x midiendo (cada vez que la Pi abre el puerto)
+  fake_scd_running = true;
+  reiniciarArduino(); step();
+  CHECK(has("\"co2_ppm\":450") && !has("FALLA_CO2"), "reinicio con el SCD4x midiendo: setup lo detiene y lo arranca");
+
+  // arranque: mientras no llega la primera muestra va null sin FALLA_CO2
+  fake_co2 = -1;
+  reiniciarArduino(); step();
+  CHECK(has("\"co2_ppm\":null") && !has("FALLA_CO2"), "arranque sin muestra todavia: null sin FALLA_CO2");
+  for (int i = 0; i < 4; ++i) step();
+  CHECK(has("\"co2_ppm\":null") && has("\"FALLA_CO2\""), "pasados 12 s sin sensor: FALLA_CO2");
+  fake_co2 = 450; step();
+  CHECK(has("\"co2_ppm\":450") && !has("FALLA_CO2"), "llega el sensor: CO2 normal");
 
   printf("\nlinea de ejemplo: %s", lastLine.c_str());
   printf("%s\n", fails ? "HAY FALLAS" : "TODO OK");

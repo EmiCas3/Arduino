@@ -114,6 +114,13 @@ bomba apagada. Si la persona había elegido MANUAL, el backend lo nota en la
 siguiente lectura y le vuelve a mandar `SG,<id>,MODO,MANUAL` (orden "system").
 Mientras tanto pueden pasar unos segundos en AUTO.
 
+El sensor de CO₂ (SCD40/SCD41) **no** se apaga cuando el Uno se reinicia: sigue
+midiendo y rechaza la orden de empezar. Por eso `setup()` primero lo detiene
+(`stop_periodic_measurement`, 500 ms) y luego lo arranca. Los primeros ~12 s
+después de arrancar, mientras llega su primera muestra, `co2_ppm` va `null`
+**sin** `FALLA_CO2`. El bus I²C tiene tiempo límite (25 ms): un falso contacto
+no congela al Arduino.
+
 En "Últimas acciones" esos casos se registran como automáticos, con su
 motivo: "El Arduino se reinició (la bomba arranca apagada)" o "Se restableció
 el modo elegido (MANUAL)".
@@ -132,9 +139,10 @@ automático si la Pi calla N minutos queda para después).
   prueba_riego
   ```
 
-  Compila el `.ino` tal cual con un Arduino de mentira y revisa 35 casos
+  Compila el `.ino` tal cual con un Arduino de mentira y revisa 42 casos
   (automático, objetivo, mínimo de 10 s, descanso, tiempo máximo, manual,
-  tanque, cambio de modo, líneas raras y sensor de CO₂ I²C).
+  tanque, cambio de modo, líneas raras y sensor de CO₂ I²C: alertas, falla,
+  reinicio con el sensor midiendo, arranque y el tiempo límite del bus).
 
 - **Cadena completa con el simulador:** `python -m gateway simulate --seco`
   (la tierra arranca en el límite y a los pocos segundos el Arduino simulado

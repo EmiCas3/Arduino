@@ -45,6 +45,8 @@
     CO2_ALTO / CO2_BAJO ................ fuera de limite (>1500 / <300 ppm)
     CO2_ALTO_LEVE / CO2_BAJO_LEVE ...... fuera del ideal (>1000 / <400 ppm)
     FALLA_DHT / FALLA_SUELO / FALLA_NIVEL / FALLA_CO2  sensor desconectado
+      (FALLA_CO2 no sale en los primeros 12 s tras arrancar: el SCD4x aun
+      no tiene su primera muestra; co2_ppm va null sin codigo)
 
   "estado" resume la linea: OK | AVISO | ALERTA
 
@@ -134,6 +136,10 @@ const int CO2_LIMITE_MAX = 1500;
 // El SCD4x entrega una muestra nueva cada 5 s. Si pasan mas de 15 s sin
 // muestra nueva (o si no responde en el bus I2C), se reporta FALLA_CO2.
 const unsigned long CO2_MAX_EDAD_MS = 15000UL;
+// Al arrancar, la primera muestra tarda ~5 s despues de start (mas los 2.5 s
+// de setup). Mientras no haya llegado ninguna, co2_ppm va null SIN FALLA_CO2:
+// todavia no hay dato, pero no es una falla. Pasado este tiempo, si.
+const unsigned long CO2_ARRANQUE_MS = 12000UL;
 
 // Luz. El sensor no esta calibrado en lux, asi que se trabaja sobre una
 // escala normalizada "mas alto = mas luz" (ver LUZ_INVERTIDA).
@@ -221,13 +227,22 @@ void setup() {
   pinMode(A4, INPUT_PULLUP);
   pinMode(A5, INPUT_PULLUP);
   Wire.begin();
-#if defined(WIRE_HAS_TIMEOUT)
-  // Evita que un falso contacto en SDA/SCL congele el loop() y la bomba.
+  // Tiempo limite del bus I2C: sin el, un falso contacto en SDA/SCL a media
+  // transmision deja al Uno esperando para siempre (sin lecturas y con la
+  // bomba en el estado en que estaba: BOMBA_MAX_MS ya no la apagaria).
+  // 25 ms y reinicio del bus. setWireTimeout() existe desde el core AVR 1.8.3
+  // (el del IDE es 1.8.6) pero ese core NO define WIRE_HAS_TIMEOUT: dentro de
+  // un #if con esa macro nunca se compilaba.
   Wire.setWireTimeout(25000, true);
-#endif
   // Esperar 2 s a que se estabilicen el DHT11 y el SCD4x (tarda hasta 1 s en
   // encender antes de aceptar comandos I2C).
   delay(2000);
+  // Si el Uno se reinicio (pasa cada vez que la Pi abre el puerto USB) el
+  // SCD4x NO se apago: sigue midiendo y rechaza start (NACK). Por eso primero
+  // stop_periodic_measurement (0x3F86) y los 500 ms que pide el sensor; si ya
+  // estaba detenido, el stop no hace nada.
+  scd4xComando(0x3F86);
+  delay(500);
   // Pone al SCD40/SCD41 a medir cada 5 s (0x21B1 = start_periodic_measurement).
   co2Iniciado = scd4xComando(0x21B1);
 }
@@ -326,6 +341,10 @@ int leerCo2() {
   if (!co2Iniciado) {
     co2Iniciado = scd4xComando(0x21B1);
     if (!co2Iniciado) {
+      // Puede que siga midiendo (rechaza start): se le manda stop y start se
+      // reintenta en la siguiente vuelta, 2 s despues (pide 500 ms). Sin
+      // delay() aqui, para no frenar el loop().
+      scd4xComando(0x3F86);
       co2Ppm = -1;
       return -1;
     }
@@ -613,9 +632,11 @@ void evaluarLuz() {
 }
 
 void evaluarCo2(int co2) {
-  if (co2 < 0)
-    alerta(F("FALLA_CO2"), ALERTA);
-  else if (co2 > CO2_LIMITE_MAX)
+  if (co2 < 0) {
+    // En el arranque todavia no hay muestra: null, pero no es falla.
+    if (co2TieneLectura || millis() >= CO2_ARRANQUE_MS)
+      alerta(F("FALLA_CO2"), ALERTA);
+  } else if (co2 > CO2_LIMITE_MAX)
     alerta(F("CO2_ALTO"), ALERTA);
   else if (co2 < CO2_LIMITE_MIN)
     alerta(F("CO2_BAJO"), ALERTA);
