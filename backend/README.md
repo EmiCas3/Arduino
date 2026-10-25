@@ -394,14 +394,16 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-425 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+427 tests: ingesta (9), horas y validación parcial de la ingesta (24),
 login (22), roles (48, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (41), espejo de las constantes del firmware (5),
 riego (31), frontend (19), histórico y gráficas (44), análisis (38), sensor
 de CO₂ (23, `test_co2.py`: ingesta, alertas, dashboard y la BD vieja de la
 Pi que gana la columna) y anomalías (41, `test_anomalies.py`: la regla pura,
-el riego que las explica y el endpoint).
+el riego que las explica y el endpoint) y contrato (2, `test_contract.py`:
+la versión de la app es la de `openapi.yaml` y todo endpoint de `/api/v1`
+está documentado ahí).
 
 La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
 
