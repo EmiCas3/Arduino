@@ -102,7 +102,7 @@ const int SUELO_MIN_VALIDO = 100;
 const int SUELO_MAX_VALIDO = 1013;
 const int NIVEL_MIN_VALIDO = 0;
 const int NIVEL_MAX_VALIDO = 1013;
-const int CO2_MIN_VALIDO = 100;
+const int CO2_MIN_VALIDO = 1;
 const int CO2_MAX_VALIDO = 40000;
 
 // ---------------- UMBRALES DEL RABANO ----------------
@@ -245,6 +245,7 @@ void setup() {
   delay(500);
   // Pone al SCD40/SCD41 a medir cada 5 s (0x21B1 = start_periodic_measurement).
   co2Iniciado = scd4xComando(0x21B1);
+  co2UltimoMs = millis();
 }
 
 // Convierte un valor crudo (0-1023) a porcentaje 0-100.
@@ -338,6 +339,7 @@ int leerCo2() {
   unsigned long ahora = millis();
 
   // Si estaba desconectado o nunca arranco, reintentar start_periodic_measurement.
+  bool recienIniciado = false;
   if (!co2Iniciado) {
     co2Iniciado = scd4xComando(0x21B1);
     if (!co2Iniciado) {
@@ -348,12 +350,16 @@ int leerCo2() {
       co2Ppm = -1;
       return -1;
     }
+    co2UltimoMs = ahora;
+    recienIniciado = true;
+    delayMicroseconds(1000);
   }
 
   // 0xE4B8 = get_data_ready_status: ademas de decir si hay muestra nueva,
   // comprueba que el sensor sigue conectado en SDA (A4) y SCL (A5).
   if (!scd4xComando(0xE4B8)) {
-    co2Iniciado = false;
+    if (!recienIniciado)
+      co2Iniciado = false;
     co2Ppm = -1;
     return -1;
   }
@@ -381,7 +387,9 @@ int leerCo2() {
     // Si lleva demasiado tiempo sin dar muestra (ej. se desconecto y volvio a
     // conectar solo VDD), le vuelve a pedir que inicie medicion periodica.
     if (ahora - co2UltimoMs > CO2_MAX_EDAD_MS) {
-      scd4xComando(0x21B1);
+      scd4xComando(0x3F86);
+      co2Iniciado = false;
+      co2UltimoMs = ahora;
     }
     co2Ppm = -1;
     return -1;
