@@ -1,7 +1,13 @@
 """
-Análisis de la información histórica de un vivero (AI-01).
+Análisis de la información histórica de un vivero (AI-01) y sus condiciones
+inusuales (AI-02).
 
     GET /greenhouses/{greenhouse_id}/analysis?from=&to=&bucket_seconds=
+    GET /greenhouses/{greenhouse_id}/anomalies?from=&to=&bucket_seconds=
+
+Las anomalías usan el mismo rango, los mismos buckets y el mismo preprocesado
+que las tendencias; la regla está en app/anomalies.py. Lo de abajo describe
+`/analysis`.
 
 Devuelve, por cada medición: un indicador de tendencia (`rising`, `stable`,
 `falling` o `insufficient_data`), la pendiente por hora, el cambio estimado en
@@ -25,13 +31,13 @@ la única conexión a la BD.)
 Permisos (AUTH-02): todos los roles; un productor solo analiza su vivero.
 """
 
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timedelta
+from typing import List, Optional, Tuple
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from app import analysis, history
+from app import analysis, anomalies, history
 from app import metrics as metric_catalog
 from app.database import get_db
 from app.dependencies import (
@@ -44,8 +50,11 @@ from app.dependencies import (
 from app.models import (
     AnalysisGap,
     AnalysisPeriod,
+    Anomaly,
+    AnomalyCheck,
     ErrorResponse,
     GreenhouseAnalysis,
+    GreenhouseAnomalies,
     VariableAnalysis,
 )
 
@@ -99,22 +108,7 @@ async def analyze_greenhouse(
 ) -> GreenhouseAnalysis:
     ensure_greenhouse_access(user, greenhouse_id)
     now = utcnow()
-    try:
-        window = history.parse_window(from_, to, now)
-    except history.RangeError as error:
-        raise _invalid_range(str(error))
-
-    bucket = bucket_seconds or (
-        history.choose_bucket(window.span_seconds, DEFAULT_ANALYSIS_POINTS)
-        or history.MIN_BUCKET_SECONDS
-    )
-    expected = history.grid(window, bucket).count
-    if expected > history.MAX_MAX_POINTS:
-        raise _invalid_range(
-            f"Un bucket de {bucket} s parte ese rango en {expected} tramos; "
-            f"el máximo es {history.MAX_MAX_POINTS}. Usa un bucket más grande "
-            "o un rango más corto."
-        )
+    window, bucket, expected = _resolve_period(from_, to, bucket_seconds, now)
 
     bounds = (greenhouse_id, history.ts_text(window.start), history.ts_text(window.end))
     buckets = await _bucket_rows(db, bucket, bounds)
@@ -175,6 +169,185 @@ async def analyze_greenhouse(
         readings=counts["total"],
         variables=variables,
     )
+
+
+@router.get(
+    "/{greenhouse_id}/anomalies",
+    response_model=GreenhouseAnomalies,
+    responses={code: {"model": ErrorResponse} for code in (401, 403, 422)},
+    summary="Condiciones inusuales del vivero en un periodo",
+    description=(
+        "Compara cada tramo del periodo con el patrón reciente de su sensor y "
+        "devuelve los que se salieron de él: sensor, valor, rango esperado y "
+        "hora. No son alertas: una anomalía puede estar dentro de los límites "
+        "del rábano. Los cambios que explica un riego (tierra que se moja, "
+        "tanque que baja) no cuentan. Sin `from` ni `to` revisa las últimas "
+        "24 horas. El mismo rango sobre los mismos datos da siempre el mismo "
+        "resultado."
+    ),
+)
+async def greenhouse_anomalies(
+    greenhouse_id: str = Path(..., min_length=1, max_length=64),
+    from_: Optional[datetime] = Query(
+        None, alias="from", description="Inicio del periodo (ISO 8601 con zona)"
+    ),
+    to: Optional[datetime] = Query(
+        None, description="Fin del periodo (ISO 8601 con zona). Por defecto, ahora"
+    ),
+    bucket_seconds: Optional[int] = Query(
+        None,
+        ge=history.MIN_BUCKET_SECONDS,
+        le=history.MAX_BUCKET_SECONDS,
+        description="Tamaño del bucket en segundos. Por defecto se elige según el rango",
+    ),
+    user: dict = Depends(require_roles(*ALL_ROLES)),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> GreenhouseAnomalies:
+    ensure_greenhouse_access(user, greenhouse_id)
+    now = utcnow()
+    window, bucket, expected = _resolve_period(from_, to, bucket_seconds, now)
+
+    # Se leen también los buckets ANTERIORES al rango que forman el patrón de
+    # los primeros: si no, la primera media hora del periodo nunca se juzgaría.
+    lookback = anomalies.BASELINE_BUCKETS * bucket
+    extended = history.Window(start=window.start - timedelta(seconds=lookback), end=window.end)
+    buckets = await _bucket_rows(
+        db, bucket,
+        (greenhouse_id, history.ts_text(extended.start), history.ts_text(window.end)),
+    )
+    cells = history.grid(window, bucket)
+    in_range = [row for row in buckets if row["bucket"] >= cells.start_epoch]
+    irrigation = anomalies.irrigation_windows(
+        await _pump_events(db, greenhouse_id, extended),
+        until=cells.end_epoch,
+    )
+
+    found: List[Anomaly] = []
+    checks: List[AnomalyCheck] = []
+    for metric in metric_catalog.METRICS:
+        if metric.anomaly_floor is None:
+            checks.append(AnomalyCheck(
+                key=metric.key, label=metric.label, unit=metric.unit,
+                checked=False, evaluated=0, anomalies=0, explained_by_irrigation=0,
+            ))
+            continue
+        prepared = analysis.prepare(
+            ((row["bucket"], row[f"{metric.key}_avg"], row[f"{metric.key}_n"]) for row in buckets),
+            extended,
+            bucket,
+        )
+        detection = anomalies.detect(
+            prepared, metric.anomaly_floor, cells.start_epoch, metric.decimals
+        )
+        kept, explained = anomalies.drop_irrigation_effects(
+            detection.anomalies, metric.key, irrigation, bucket
+        )
+        found.extend(_anomaly_out(metric, item, cells.end_epoch - bucket) for item in kept)
+        checks.append(AnomalyCheck(
+            key=metric.key, label=metric.label, unit=metric.unit,
+            checked=True, evaluated=detection.evaluated, anomalies=len(kept),
+            explained_by_irrigation=explained, floor=metric.anomaly_floor,
+        ))
+
+    # Las más recientes primero; en empate, en el orden del catálogo (sorted
+    # es estable), para que la misma consulta dé la misma lista.
+    found.sort(key=lambda item: item.to, reverse=True)
+    return GreenhouseAnomalies(
+        greenhouse_id=greenhouse_id,
+        generated_at=now,
+        period=AnalysisPeriod(
+            from_=window.start,
+            to=window.end,
+            hours=round(window.span_hours, 3),
+            bucket_seconds=bucket,
+            expected_samples=expected,
+        ),
+        baseline_seconds=lookback,
+        has_data=any(row["total"] for row in in_range),
+        anomalies=found,
+        variables=checks,
+    )
+
+
+def _anomaly_out(metric, item: anomalies.Anomaly, last_bucket: int) -> Anomaly:
+    """Una anomalía del cálculo puro, con los datos de su medición.
+
+    `ongoing`: llega al último bucket del periodo o al anterior (el último
+    casi siempre va a medias y puede no traer lecturas todavía).
+    """
+    return Anomaly(
+        id=f"{metric.key}-{item.start_epoch}",
+        metric=metric.key,
+        label=metric.label,
+        unit=metric.unit,
+        kind=item.kind,
+        ts=history.from_epoch(item.peak_epoch),
+        value=item.value,
+        expected=item.expected.center,
+        expected_min=item.expected.low,
+        expected_max=item.expected.high,
+        from_=history.from_epoch(item.start_epoch),
+        to=history.from_epoch(item.end_epoch),
+        buckets=item.buckets,
+        ongoing=item.end_epoch >= last_bucket,
+    )
+
+
+async def _pump_events(
+    db: aiosqlite.Connection, greenhouse_id: str, window: history.Window
+) -> List[tuple]:
+    """Encendidos y apagados de la bomba (ACT-02) que tocan la ventana.
+
+    Incluye el último evento ANTERIOR a la ventana: si la bomba ya venía
+    encendida, el riego empezó antes y sigue contando.
+    """
+    start, end = history.ts_text(window.start), history.ts_text(window.end)
+    query = """
+        SELECT e.reading_ts, e.event
+        FROM actuator_events e
+        JOIN actuators a ON a.actuator_id = e.actuator_id
+        WHERE e.greenhouse_id = ? AND a.type = 'pump' AND {condition}
+        ORDER BY e.reading_ts {order}, e.id {order}
+        {limit}
+    """
+    cursor = await db.execute(
+        query.format(condition="e.reading_ts < ?", order="DESC", limit="LIMIT 1"),
+        (greenhouse_id, start),
+    )
+    rows = list(await cursor.fetchall())
+    cursor = await db.execute(
+        query.format(condition="e.reading_ts >= ? AND e.reading_ts < ?", order="ASC", limit=""),
+        (greenhouse_id, start, end),
+    )
+    rows.extend(await cursor.fetchall())
+    return [
+        (int(datetime.fromisoformat(row["reading_ts"]).timestamp()), row["event"] == "on")
+        for row in rows
+    ]
+
+
+def _resolve_period(
+    from_: Optional[datetime], to: Optional[datetime],
+    bucket_seconds: Optional[int], now: datetime,
+) -> Tuple[history.Window, int, int]:
+    """Rango, tamaño de bucket y buckets esperados; 422 si no son usables."""
+    try:
+        window = history.parse_window(from_, to, now)
+    except history.RangeError as error:
+        raise _invalid_range(str(error))
+
+    bucket = bucket_seconds or (
+        history.choose_bucket(window.span_seconds, DEFAULT_ANALYSIS_POINTS)
+        or history.MIN_BUCKET_SECONDS
+    )
+    expected = history.grid(window, bucket).count
+    if expected > history.MAX_MAX_POINTS:
+        raise _invalid_range(
+            f"Un bucket de {bucket} s parte ese rango en {expected} tramos; "
+            f"el máximo es {history.MAX_MAX_POINTS}. Usa un bucket más grande "
+            "o un rango más corto."
+        )
+    return window, bucket, expected
 
 
 def _totals(buckets: List[aiosqlite.Row]) -> dict:

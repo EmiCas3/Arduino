@@ -26,6 +26,7 @@ const ICONS = {
   trendUp: '<path d="M4 16.5l5.5-5.5 3.5 3L20 7"/><path d="M14.5 7H20v5.5"/>',
   trendDown: '<path d="M4 7.5l5.5 5.5 3.5-3L20 17"/><path d="M14.5 17H20v-5.5"/>',
   minus: '<path d="M7 12h10"/>',
+  pulse: '<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
   chip: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',

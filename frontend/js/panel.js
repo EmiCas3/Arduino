@@ -13,6 +13,7 @@
  */
 import { apiFetch, ApiError } from "./api.js";
 import { mountAlerts } from "./alerts.js";
+import { mountAnomalies } from "./anomalies.js";
 import { mountLiveReadings } from "./dashboard.js";
 import { mountEquipment } from "./equipment.js";
 import { mountHistory } from "./history.js";
@@ -203,6 +204,8 @@ function renderInicio() {
   const liveBody = h("div", { class: "live" }, loadingLines());
   const alertsBody = h("div", { class: "alerts" }, loadingLines(2));
   const alertsCount = h("div", { class: "alerts-count" });
+  const anomaliesBody = h("div", { class: "alerts" }, loadingLines(2));
+  const anomaliesCount = h("div", { class: "alerts-count" });
 
   view.replaceChildren(
     pageHead({
@@ -231,6 +234,10 @@ function renderInicio() {
         cardHead("Alertas", "Cuando el Arduino reporta que una medición cruzó su límite. Aparecen solas, sin recargar.", alertsCount, "t-alertas"),
         alertsBody),
 
+      h("section", { class: "card span-12", "aria-labelledby": "t-anomalias" },
+        cardHead("Condiciones inusuales", "Cuando una medición se sale de lo que su sensor venía haciendo, aunque siga dentro de los límites. No es una alerta: es un aviso temprano.", anomaliesCount, "t-anomalias"),
+        anomaliesBody),
+
       h("section", { class: "card span-7", "aria-labelledby": "t-equipos" },
         cardHead("Equipos del vivero", "Lo que el Arduino reporta de cada equipo y el control del riego. Se actualiza solo cada 15 s.", null, "t-equipos"),
         equipmentBody),
@@ -248,30 +255,37 @@ function renderInicio() {
       ),
     ),
   );
-  startLiveReadings({ body: liveBody, picker, equipmentBody, alertsBody, alertsCount });
+  startLiveReadings({
+    body: liveBody, picker, equipmentBody, alertsBody, alertsCount, anomaliesBody, anomaliesCount,
+  });
 }
 
 /**
- * Arranca los widgets en vivo (DASH-01, ALERT-01, ACT-04) en el vivero del
- * usuario, o en el que elija un admin. Todos se detienen juntos al salir de
- * la vista o al cambiar de vivero.
+ * Arranca los widgets en vivo (DASH-01, ALERT-01, AI-02, ACT-04) en el vivero
+ * del usuario, o en el que elija un admin. Todos se detienen juntos al salir
+ * de la vista o al cambiar de vivero.
  */
-function startLiveReadings({ body, picker, equipmentBody, alertsBody, alertsCount }) {
+function startLiveReadings({
+  body, picker, equipmentBody, alertsBody, alertsCount, anomaliesBody, anomaliesCount,
+}) {
   return withGreenhouse({
     picker,
     mount: (greenhouseId) => [
       mountLiveReadings(body, greenhouseId),
       mountAlerts(alertsBody, greenhouseId, alertsCount),
+      mountAnomalies(anomaliesBody, greenhouseId, anomaliesCount),
       mountEquipment(equipmentBody, greenhouseId),
     ],
     onError: (error) => {
       body.replaceChildren(errorNotice(error));
       equipmentBody.replaceChildren();
       alertsBody.replaceChildren();
+      anomaliesBody.replaceChildren();
     },
     onEmpty: () => {
       equipmentBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay equipos que mostrar."));
       alertsBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay alertas."));
+      anomaliesBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay nada que comparar."));
       body.replaceChildren(noGreenhouseNotice());
     },
   });

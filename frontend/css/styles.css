@@ -1091,6 +1091,29 @@ code, .mono {
 }
 .alerts-count:empty { display: none; }
 
+/* ── Condiciones inusuales (AI-02) ─────────────────────────────────────
+   Mismo acomodo que una alerta, pero en azul y con borde punteado: una
+   anomalía es un aviso temprano, no un límite cruzado (criterio 2). */
+
+.pill-info { background: var(--sky-soft); color: var(--sky); }
+.anomaly-item {
+  border-color: color-mix(in srgb, var(--sky) 24%, var(--line));
+  border-left: 4px dashed var(--sky);
+  background: color-mix(in srgb, var(--sky-soft) 45%, var(--surface));
+}
+.anomaly-item[data-ongoing="false"] {
+  border-color: var(--line);
+  border-left-color: var(--line-strong);
+  background: var(--surface-2);
+}
+.anomaly-item .alert-icon { background: var(--sky-soft); color: var(--sky); }
+.anomaly-item .alert-title { color: var(--sky); }
+.anomaly-item[data-ongoing="false"] .alert-icon { background: var(--surface-3); color: var(--muted); }
+.anomaly-item[data-ongoing="false"] .alert-title { color: var(--ink-2); font-weight: 600; }
+.anomaly-expected { color: var(--muted); }
+.anomaly-empty { background: var(--sky-soft); color: var(--sky); }
+.anomaly-method { font-size: 0.75rem; color: var(--muted); }
+
 /* Avisos flotantes: una alerta nueva llega sin recargar la página. */
 .toasts {
   position: fixed;

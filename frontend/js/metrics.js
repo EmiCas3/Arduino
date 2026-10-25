@@ -298,6 +298,42 @@ export function visibleAlerts(alerts = [], { maxCleared = 5, recentHours = 24, n
   return { active, cleared };
 }
 
+// ── Anomalías (AI-02) ─────────────────────────────────────────────────
+
+/**
+ * Textos de una anomalía de /anomalies, listos para dibujar:
+ *   title     "Humedad de la tierra por debajo de lo habitual"
+ *   value     "48 % a las 14:21"
+ *   expected  "lo esperado: 57–67 %"
+ *   since     "desde las 14:20 · sigue así" o "de 14:20 a 14:23 · duró 3 min"
+ * No habla de límites: una anomalía no es una alerta (criterio 2 de AI-02).
+ * `clock` formatea horas.
+ */
+export function describeAnomaly(anomaly, clock = (iso) => iso) {
+  const look = presentationFor({ key: anomaly.metric, label: anomaly.label, unit: anomaly.unit });
+  const number = (value) => formatValue({ key: anomaly.metric, value });
+  const seconds = (Date.parse(anomaly.to) - Date.parse(anomaly.from)) / 1000;
+  return {
+    title: `${look.label} ${anomaly.kind === "high" ? "por encima" : "por debajo"} de lo habitual`,
+    value: `${formatMeasure(anomaly.metric, anomaly.value, anomaly.unit)} a las ${clock(anomaly.ts)}`,
+    expected: `lo esperado: ${number(anomaly.expected_min)}–${number(anomaly.expected_max)} ${look.unit}`.trim(),
+    since: anomaly.ongoing
+      ? `desde las ${clock(anomaly.from)} · sigue así`
+      : `de ${clock(anomaly.from)} a ${clock(anomaly.to)} · duró ${formatDuration(seconds)}`,
+  };
+}
+
+/**
+ * Qué anomalías se muestran: todas las que siguen y, de las que ya pasaron,
+ * las `maxPast` más recientes. La API ya las manda de la más nueva a la más vieja.
+ */
+export function visibleAnomalies(anomalies = [], { maxPast = 5 } = {}) {
+  return {
+    ongoing: anomalies.filter((anomaly) => anomaly.ongoing),
+    past: anomalies.filter((anomaly) => !anomaly.ongoing).slice(0, maxPast),
+  };
+}
+
 /** Título de la pestaña con el número de alertas activas: "(2) Mi vivero · …". */
 export function titleWithCount(title, count) {
   const base = String(title || "").replace(/^\(\d+\)\s+/, "");

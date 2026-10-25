@@ -21,6 +21,7 @@ const {
   alertsFor,
   commandFeedback,
   describeAlert,
+  describeAnomaly,
   eventText,
   formatDuration,
   formatMeasure,
@@ -28,6 +29,7 @@ const {
   newActiveAlerts,
   titleWithCount,
   visibleAlerts,
+  visibleAnomalies,
   formatAge,
   formatValue,
   metricState,
@@ -321,4 +323,40 @@ test("las acciones automáticas y manuales se distinguen", () => {
   assert.equal(manual.origin, "Manual · Emi");
   assert.equal(manual.what, "Bomba apagada");
   assert.equal(eventText({ actuator_type: "fan", event: "on", origin: "auto" }).what, "Ventilador encendido");
+});
+
+// ── Anomalías (AI-02) ─────────────────────────────────────────────────
+
+const ANOMALY = {
+  id: "suelo_pct-1760000000", metric: "suelo_pct", label: "Humedad de la tierra", unit: "%",
+  kind: "low", ts: "2026-10-25T14:21:00+00:00", value: 48.0, expected: 62.0,
+  expected_min: 56.8, expected_max: 67.2, from: "2026-10-25T14:20:00+00:00",
+  to: "2026-10-25T14:23:00+00:00", buckets: 3, ongoing: false,
+};
+
+test("una anomalía dice sensor, valor, rango esperado y hora, sin hablar de límites", () => {
+  const text = describeAnomaly(ANOMALY, (iso) => iso.slice(11, 16));
+  assert.equal(text.title, "Humedad de la tierra por debajo de lo habitual");
+  assert.equal(text.value, "48 % a las 14:21");
+  assert.equal(text.expected, "lo esperado: 57–67 %");
+  assert.equal(text.since, "de 14:20 a 14:23 · duró 3 min");
+  assert.doesNotMatch(Object.values(text).join(" "), /límite/);
+});
+
+test("una anomalía que sigue lo dice", () => {
+  const text = describeAnomaly({ ...ANOMALY, kind: "high", ongoing: true, metric: "temp_c", value: 26.4 },
+    (iso) => iso.slice(11, 16));
+  assert.equal(text.title, "Temperatura por encima de lo habitual");
+  assert.equal(text.value, "26.4 °C a las 14:21");
+  assert.equal(text.since, "desde las 14:20 · sigue así");
+});
+
+test("la tarjeta muestra todas las que siguen y solo las 5 pasadas más recientes", () => {
+  const list = [
+    { ...ANOMALY, id: "a", ongoing: true },
+    ...Array.from({ length: 7 }, (_, i) => ({ ...ANOMALY, id: `p${i}` })),
+  ];
+  const { ongoing, past } = visibleAnomalies(list);
+  assert.deepEqual(ongoing.map((a) => a.id), ["a"]);
+  assert.deepEqual(past.map((a) => a.id), ["p0", "p1", "p2", "p3", "p4"]);
 });

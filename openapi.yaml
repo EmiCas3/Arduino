@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.6.0
+  version: 1.7.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -69,6 +69,15 @@ info:
     `/readings`, en `/readings/series` (`metric=co2_ppm`), en el analisis y
     como `metric` de las alertas. Sin rutas nuevas. Compatible hacia atras:
     una lectura sin `co2_ppm` se sigue aceptando.
+
+    **v1.7.0 (Sprint 3, AI-02):** condiciones inusuales.
+    `GET /greenhouses/{greenhouse_id}/anomalies` compara cada bucket del
+    rango con el patron reciente de su sensor (mediana y dispersion robusta
+    de los buckets anteriores) y devuelve los que se salieron: sensor, valor,
+    rango esperado y hora. Una anomalia NO es una alerta: no trae umbral ni
+    codigo del firmware y puede estar dentro de los limites del rabano. Los
+    cambios que explica un riego (tierra que se moja, tanque que baja) no
+    cuentan, y la luz no se revisa. Sin campos nuevos en las rutas existentes.
 
     ## Convenciones que no se negocian
 
@@ -157,7 +166,7 @@ tags:
   - name: irrigation
     description: Riego automatico y manual (ACT-02)
   - name: analysis
-    description: Analisis de la informacion historica (AI-01)
+    description: Analisis de la informacion historica (AI-01) y condiciones inusuales (AI-02)
 
 security:
   - ApiKeyAuth: []
@@ -533,6 +542,86 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GreenhouseAnalysis'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/InvalidRange'
+
+  /greenhouses/{greenhouse_id}/anomalies:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [analysis]
+      summary: Condiciones inusuales del vivero en un periodo (AI-02)
+      description: |
+        Compara cada tramo del periodo con el patron reciente de su sensor y
+        devuelve los que se salieron de el.
+
+        **Como se calcula.** Las lecturas se promedian por bucket, igual que
+        en el analisis. Para cada bucket, el patron son los buckets con dato
+        de los `baseline_seconds` anteriores (12 buckets; hacen falta al menos
+        6). Rango esperado = mediana del patron +/- 3.5 veces su dispersion
+        robusta (MAD x 1.4826), nunca mas angosto que `floor` hacia cada lado.
+        Un bucket fuera de ese rango es anomalia; dentro, no. Los buckets
+        seguidos fuera de rango, en el mismo sentido, son UNA anomalia:
+        `value`, `ts` y el rango esperado son los del bucket mas alejado, y
+        `from`/`to` dicen cuanto duro. Para que los primeros buckets del
+        periodo tengan patron, se leen tambien las lecturas de justo antes
+        de `from`.
+
+        **No es una alerta.** No trae umbral ni codigo del firmware y puede
+        estar dentro de los limites del rabano: es el aviso temprano. Las
+        alertas por limite siguen en `/alerts`.
+
+        **Lo que no cuenta.** Los cambios que explica un riego (la tierra
+        hacia arriba y el tanque hacia abajo, empezando con la bomba
+        encendida o hasta 10 min despues de apagarla) se cuentan en
+        `explained_by_irrigation`, no como anomalias. Un sensor caido
+        (`null`) no es anomalia. La luz no se revisa (`checked: false`):
+        cambia sola con el sol y las nubes.
+
+        **Reproducible.** El mismo rango sobre los mismos datos da siempre las
+        mismas anomalias, con el mismo `id`.
+      operationId: getGreenhouseAnomalies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          description: Inicio del periodo (ISO 8601 CON zona; sin zona da 422). Por defecto, 24 h atras
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Fin del periodo (ISO 8601 CON zona; sin zona da 422). Por defecto, ahora
+          schema:
+            type: string
+            format: date-time
+        - name: bucket_seconds
+          in: query
+          description: |
+            Tamano del bucket. Por defecto se elige segun el rango (el mismo
+            que usan la grafica y el analisis). Si parte el rango en mas de
+            1000 tramos responde 422.
+          schema:
+            type: integer
+            minimum: 10
+            maximum: 86400
+      responses:
+        '200':
+          description: Anomalias del periodo, las mas recientes primero
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GreenhouseAnomalies'
         '401':
           $ref: '#/components/responses/SessionRequired'
         '403':
@@ -2408,6 +2497,120 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/VariableAnalysis'
+
+    Anomaly:
+      type: object
+      description: |
+        Una medicion que se salio de su patron reciente (AI-02). No es una
+        alerta: no cruzo ningun limite del firmware.
+      required:
+        [id, metric, label, unit, kind, ts, value, expected, expected_min,
+         expected_max, from, to, buckets, ongoing]
+      properties:
+        id:
+          type: string
+          description: Estable entre consultas (medicion + inicio en epoca Unix)
+          example: suelo_pct-1761402000
+        metric:
+          $ref: '#/components/schemas/MetricKey'
+        label:
+          type: string
+          example: Humedad de la tierra
+        unit:
+          type: string
+          example: '%'
+        kind:
+          type: string
+          enum: [high, low]
+          description: high = mas alto de lo esperado; low = mas bajo
+        ts:
+          type: string
+          format: date-time
+          description: Inicio del bucket mas alejado del patron
+        value:
+          type: number
+          description: Promedio de ese bucket
+          example: 48.0
+        expected:
+          type: number
+          description: Centro del patron reciente (mediana)
+          example: 62.0
+        expected_min:
+          type: number
+          example: 56.8
+        expected_max:
+          type: number
+          example: 67.2
+        from:
+          type: string
+          format: date-time
+          description: Inicio del primer bucket fuera de rango
+        to:
+          type: string
+          format: date-time
+          description: Fin del ultimo bucket fuera de rango
+        buckets:
+          type: integer
+          example: 3
+        ongoing:
+          type: boolean
+          description: Sigue fuera de rango en lo mas reciente del periodo
+
+    AnomalyCheck:
+      type: object
+      description: Que tanto se pudo revisar una medicion en el periodo.
+      required: [key, label, unit, checked, evaluated, anomalies, explained_by_irrigation]
+      properties:
+        key:
+          $ref: '#/components/schemas/MetricKey'
+        label:
+          type: string
+        unit:
+          type: string
+        checked:
+          type: boolean
+          description: false = esta medicion no se revisa (la luz)
+        evaluated:
+          type: integer
+          description: Buckets que tuvieron patron reciente con que compararse
+        anomalies:
+          type: integer
+        explained_by_irrigation:
+          type: integer
+          description: Cambios fuera del patron que explica un riego
+        floor:
+          type: number
+          nullable: true
+          description: Ancho minimo del rango esperado, hacia cada lado
+          example: 4.0
+
+    GreenhouseAnomalies:
+      type: object
+      required: [greenhouse_id, generated_at, period, baseline_seconds, has_data, anomalies, variables]
+      properties:
+        greenhouse_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+          description: Metadato de la respuesta; no entra en el calculo
+        period:
+          $ref: '#/components/schemas/AnalysisPeriod'
+        baseline_seconds:
+          type: integer
+          description: Ventana del patron reciente con que se compara cada bucket
+          example: 1440
+        has_data:
+          type: boolean
+        anomalies:
+          type: array
+          description: Las mas recientes primero
+          items:
+            $ref: '#/components/schemas/Anomaly'
+        variables:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnomalyCheck'
 
     ErrorDetail:
       type: object

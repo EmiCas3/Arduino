@@ -17,6 +17,7 @@ from typing import Any, List, Optional, Union
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, validator
 
 from app.analysis import TrendDirection
+from app.anomalies import AnomalyKind
 
 
 # ── Enums ──────────────────────────────────────────────────────────────
@@ -788,3 +789,73 @@ class GreenhouseAnalysis(BaseModel):
     has_data: bool
     readings: int = Field(..., description="Lecturas del vivero en el rango")
     variables: List[VariableAnalysis]
+
+
+# ── Anomalías (AI-02) ──────────────────────────────────────────────────
+
+class Anomaly(BaseModel):
+    """Una medición que se salió de su patrón reciente (criterio 1 de AI-02).
+
+    No es una alerta: no cruzó ningún límite del firmware, se salió de lo que
+    ese sensor venía haciendo. Si dura varios buckets seguidos es una sola
+    anomalía; `ts`, `value` y el rango esperado son los del bucket más alejado.
+    """
+
+    id: str = Field(..., description="Estable entre consultas: medición + inicio")
+    metric: MetricKey
+    label: str
+    unit: str
+    kind: AnomalyKind = Field(
+        ..., description="high = más alto de lo esperado; low = más bajo"
+    )
+    ts: datetime = Field(..., description="Inicio del bucket más alejado del patrón")
+    value: float = Field(..., description="Promedio de ese bucket")
+    expected: float = Field(..., description="Centro del patrón reciente (mediana)")
+    expected_min: float
+    expected_max: float
+    from_: datetime = Field(..., alias="from", description="Inicio del primer bucket fuera de rango")
+    to: datetime = Field(..., description="Fin del último bucket fuera de rango")
+    buckets: int
+    ongoing: bool = Field(
+        ..., description="Sigue fuera de rango en lo más reciente del periodo"
+    )
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class AnomalyCheck(BaseModel):
+    """Qué tanto se pudo revisar una medición en el periodo."""
+
+    key: MetricKey
+    label: str
+    unit: str
+    checked: bool = Field(
+        ..., description="false = esta medición no se revisa (la luz cambia sola con el sol)"
+    )
+    evaluated: int = Field(
+        ..., description="Buckets que tuvieron patrón reciente con qué compararse"
+    )
+    anomalies: int
+    explained_by_irrigation: int = Field(
+        ..., description="Cambios que sí se salieron del patrón, pero los explica un riego"
+    )
+    floor: Optional[float] = Field(
+        None, description="Ancho mínimo del rango esperado, hacia cada lado"
+    )
+
+
+class GreenhouseAnomalies(BaseModel):
+    greenhouse_id: str
+    generated_at: datetime = Field(
+        ..., description="Metadato de la respuesta; no entra en el cálculo"
+    )
+    period: AnalysisPeriod
+    baseline_seconds: int = Field(
+        ..., description="Ventana del patrón reciente con que se compara cada bucket"
+    )
+    has_data: bool
+    anomalies: List[Anomaly] = Field(
+        default_factory=list, description="Las más recientes primero"
+    )
+    variables: List[AnomalyCheck]

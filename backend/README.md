@@ -11,6 +11,7 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 | DASH-01 | API de últimas lecturas por vivero, lista de viveros y refresco en segundo plano para los widgets del dashboard |
 | DASH-02 | Histórico de un rango y serie de una medición lista para graficar (promediada por bucket cuando hay demasiados puntos) |
 | AI-01 | Análisis de la información histórica: tendencia por variable, con el periodo usado y la calidad del dato |
+| AI-02 | Condiciones inusuales: lo que se sale del patrón reciente de su sensor, con valor, rango esperado y hora |
 
 También sirve el frontend (`../frontend`) desde el mismo origen.
 
@@ -107,9 +108,10 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/readings` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/readings/series` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/analysis` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/anomalies` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.5.1).
+El contrato completo está en `../openapi.yaml` (v1.7.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -260,6 +262,45 @@ Los umbrales del rábano siguen viviendo en el firmware. `stable_band` es un
 parámetro de análisis, no un umbral agronómico, y está pendiente de ajustar
 con datos de varios días.
 
+### Condiciones inusuales (AI-02)
+
+`GET /greenhouses/{id}/anomalies` devuelve las veces que una medición **se
+salió de lo que su sensor venía haciendo**: sensor, valor, rango esperado y
+hora (criterio 1). Una anomalía **no es una alerta**: la alerta dice "cruzó
+el límite del rábano" (fijo, en el firmware); la anomalía dice "esto no es lo
+de siempre", aunque siga dentro de los límites. Es el aviso temprano.
+
+La regla vive en `app/anomalies.py`, en funciones puras, y trabaja sobre la
+misma serie por bucket que deja `analysis.prepare` (AI-01):
+
+1. **Patrón reciente**: los buckets con dato de los 12 anteriores (una
+   ventana de tiempo; tras un hueco largo no hay patrón y no se juzga).
+   Hacen falta al menos 6.
+2. **Rango esperado**: mediana ± 3.5 × MAD × 1.4826 (el "z-score
+   modificado"). Mediana y MAD porque una lectura rara dentro del patrón casi
+   no los mueve. El ancho nunca baja de `anomaly_floor` (`app/metrics.py`):
+   un sensor muy quieto tendría un rango de ±0.
+3. **Anomalía**: un bucket fuera de su rango; dentro, nada (criterio 3). Los
+   buckets seguidos fuera de rango son una sola anomalía, con su pico.
+
+Qué **no** sale como anomalía:
+
+| Caso | Por qué |
+|---|---|
+| Subida o bajada gradual (el día que se calienta) | Es un patrón: la dispersión del tramo cubre el retraso de la mediana |
+| Un cambio de nivel que ya duró media ventana | Ya es "lo nuevo normal": sale una vez y luego no |
+| Tierra que se moja / tanque que baja con la bomba encendida (o hasta 10 min después) | Lo explica el riego (`actuator_events` de ACT-02); se cuenta en `explained_by_irrigation` |
+| Sensor en `null` | Es un sensor caído: eso lo dice `FALLA_*` en las alertas |
+| Luz | No se revisa (`checked: false`): sube y baja sola con el sol y las nubes |
+
+Para que los primeros minutos del periodo tengan patrón, se leen también las
+lecturas de justo antes de `from`. **Reproducible** igual que AI-01: mismas
+lecturas y mismo rango, mismas anomalías con el mismo `id`.
+
+`anomaly_floor` (°C 1.0 · humedad del aire 4 % · tierra 4 % · tanque 4 % ·
+CO₂ 60 ppm) también es un parámetro de análisis, pendiente de ajustar con
+datos reales de varios días, igual que `stable_band`.
+
 ### Ejemplos
 
 ```bash
@@ -353,13 +394,14 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-381 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (46, incluye el barrido de todas las rutas), actuadores
+425 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (48, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (41), espejo de las constantes del firmware (5),
-riego (31), frontend (18), histórico y gráficas (44), análisis (38) y sensor
+riego (31), frontend (19), histórico y gráficas (44), análisis (38), sensor
 de CO₂ (23, `test_co2.py`: ingesta, alertas, dashboard y la BD vieja de la
-Pi que gana la columna).
+Pi que gana la columna) y anomalías (41, `test_anomalies.py`: la regla pura,
+el riego que las explica y el endpoint).
 
 La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
 
@@ -385,6 +427,7 @@ backend/
 │   ├── metrics.py       # Catálogo de mediciones: columna, etiqueta, unidad
 │   ├── history.py       # Rango y resolución de una consulta histórica (DASH-02 / AI-01)
 │   ├── analysis.py      # Preprocesado y tendencias, en funciones puras (AI-01)
+│   ├── anomalies.py     # Detección de condiciones inusuales, en funciones puras (AI-02)
 │   ├── alerts.py        # Motor de alertas (ALERT-01)
 │   ├── irrigation.py    # Riego: modo, órdenes, confirmaciones y registro (ACT-02)
 │   └── routers/
@@ -392,7 +435,7 @@ backend/
 │       ├── auth.py      # login / logout / me (AUTH-01)
 │       ├── actuators.py # CRUD sin DELETE (CONF-05) y órdenes manuales (ACT-02)
 │       ├── readings.py  # viveros, últimas lecturas (DASH-01) e histórico (DASH-02)
-│       ├── analysis.py  # tendencias del vivero (AI-01)
+│       ├── analysis.py  # tendencias (AI-01) y anomalías (AI-02) del vivero
 │       ├── control.py   # estado de los equipos (ACT-04) y riego (ACT-02)
 │       └── alerts.py    # alertas del vivero (ALERT-01)
 ├── tests/

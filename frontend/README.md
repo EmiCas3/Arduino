@@ -4,7 +4,8 @@ Interfaz web del vivero de rábano. Hoy cubre **AUTH-01** (login), la parte
 de UI de **AUTH-02** (menú por rol), los widgets de lecturas en vivo de
 **DASH-01**, las alertas de **ALERT-01**, los actuadores de **CONF-05**, su
 estado en vivo (**ACT-04**), el control del riego (**ACT-02**), las gráficas
-históricas de **DASH-02** y las tendencias de **AI-01**.
+históricas de **DASH-02**, las tendencias de **AI-01** y las condiciones
+inusuales de **AI-02**.
 
 Es **HTML + CSS + JavaScript sin framework ni paso de build** (decisión D1 = A
 del plan del Sprint 2). FastAPI sirve esta carpeta desde el mismo origen que
@@ -38,6 +39,7 @@ frontend/
 │   ├── dashboard.js  → DASH-01: tarjetas en vivo, refresco cada 15 s
 │   ├── metrics.js    → estados y textos de los widgets (lógica pura, sin DOM)
 │   ├── alerts.js     → ALERT-01: tarjeta "Alertas", avisos flotantes y contador
+│   ├── anomalies.js  → AI-02: tarjeta "Condiciones inusuales" (aviso temprano)
 │   ├── equipment.js  → ACT-04 y ACT-02: estado de los equipos y control del riego
 │   ├── poller.js     → refresco cada 15 s compartido por los widgets nuevos
 │   ├── history.js    → DASH-02 y AI-01: vista "Historial" (gráfica + tendencias)
@@ -129,6 +131,28 @@ crea el backend cuando el Arduino reporta que una medición cruzó su límite
   las que llegan después.
 - Los umbrales viven en el firmware: el número del límite llega de la API,
   no hay umbrales en JavaScript.
+
+## Condiciones inusuales (AI-02)
+
+La tarjeta "Condiciones inusuales" de "Mi vivero" (`anomalies.js`), justo
+debajo de "Alertas", muestra lo que devuelve
+`GET /greenhouses/{id}/anomalies` para las últimas 6 h: mediciones que se
+salieron de lo que su sensor venía haciendo, aunque sigan dentro de los
+límites.
+
+- **Se distingue de una alerta** (criterio 2 de AI-02): va en otra tarjeta,
+  en azul en vez de rojo, con borde punteado y el ícono de pulso en vez del
+  triángulo, y el texto nunca habla de "límite": dice "por encima / por
+  debajo de lo habitual" y el **rango esperado** ("48 % a las 14:21 · lo
+  esperado: 57–67 %").
+- **En curso** primero; de las que ya pasaron, las 5 más recientes,
+  atenuadas, con cuánto duraron. El encabezado dice "1 en curso", "3 en 6 h"
+  o "Todo habitual".
+- Si no hay suficiente historia para tener un patrón, o no hay lecturas, lo
+  dice en vez de mostrar "todo bien". Al pie dice contra cuánto tiempo se
+  compara cada medición y cuál no se revisa (la luz).
+- Se refresca cada minuto: el patrón se mide en buckets de 2 min.
+- Sin avisos flotantes: esos son para las alertas.
 
 ## Estado de los equipos (ACT-04)
 
@@ -283,9 +307,10 @@ empezado con React + Vite.
 3. **Agregación en el servidor.** ✅ Hecho: `/readings/series` devuelve como
    máximo `max_points` puntos, promediados por bucket y con el mínimo y el
    máximo de cada uno.
-4. **Vistas de AI.** AI-01 ✅ (tarjetas de tendencia en "Historial"). Faltan
-   AI-02 (anomalías) y AI-05 (explicación en lenguaje claro); reutilizan
-   `.card`, `.notice` y `.pill`.
+4. **Vistas de AI.** AI-01 ✅ (tarjetas de tendencia en "Historial"). AI-02 ✅
+   (tarjeta "Condiciones inusuales" en "Mi vivero"; reutiliza el acomodo de
+   `.alert-item` con colores propios). Falta AI-05 (explicación en lenguaje
+   claro); reutiliza `.card`, `.notice` y `.pill`.
 
 ### Sprint 4 (integración)
 
