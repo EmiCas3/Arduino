@@ -30,13 +30,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="SmartGreenAI - Radish Crop API",
-    version="1.7.0",
+    version="1.8.0",
     description=(
         "Backend del vivero de rábanos: ingesta de lecturas (X-API-Key del "
         "gateway), sesiones de usuario con JWT, control de acceso por rol, "
         "registro de actuadores, últimas lecturas, estado de los equipos, "
-        "alertas, histórico para las gráficas, análisis de tendencias y "
-        "condiciones inusuales."
+        "alertas, histórico para las gráficas, análisis de tendencias, "
+        "condiciones inusuales y recomendación de riego."
     ),
     lifespan=lifespan,
 )
