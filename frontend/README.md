@@ -309,8 +309,11 @@ empezado con React + Vite.
    máximo de cada uno.
 4. **Vistas de AI.** AI-01 ✅ (tarjetas de tendencia en "Historial"). AI-02 ✅
    (tarjeta "Condiciones inusuales" en "Mi vivero"; reutiliza el acomodo de
-   `.alert-item` con colores propios). Falta AI-05 (explicación en lenguaje
-   claro); reutiliza `.card`, `.notice` y `.pill`.
+   `.alert-item` con colores propios). AI-04 ✅ solo en la API
+   (`/irrigation/recommendation`): la recomendación se muestra con AI-05,
+   porque una recomendación sin su explicación en lenguaje claro no se debe
+   mostrar (criterio 4 de AI-05). Falta AI-05; reutiliza `.card`, `.notice`
+   y `.pill`.
 
 ### Sprint 4 (integración)
 

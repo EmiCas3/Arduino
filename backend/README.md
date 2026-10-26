@@ -12,6 +12,7 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 | DASH-02 | Histórico de un rango y serie de una medición lista para graficar (promediada por bucket cuando hay demasiados puntos) |
 | AI-01 | Análisis de la información histórica: tendencia por variable, con el periodo usado y la calidad del dato |
 | AI-02 | Condiciones inusuales: lo que se sale del patrón reciente de su sensor, con valor, rango esperado y hora |
+| AI-04 | Recomendación de riego que pesa juntas la humedad de la tierra, la temperatura y el tiempo desde el último riego |
 
 También sirve el frontend (`../frontend`) desde el mismo origen.
 
@@ -109,9 +110,10 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/readings/series` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/analysis` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/anomalies` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/irrigation/recommendation` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.7.0).
+El contrato completo está en `../openapi.yaml` (v1.8.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -301,6 +303,48 @@ lecturas y mismo rango, mismas anomalías con el mismo `id`.
 CO₂ 60 ppm) también es un parámetro de análisis, pendiente de ajustar con
 datos reales de varios días, igual que `stable_band`.
 
+### Recomendación de riego (AI-04)
+
+`GET /greenhouses/{id}/irrigation/recommendation` recomienda regar ahora,
+pronto o no. Hasta ahora el único criterio era el del Arduino (tierra abajo
+de `SUELO_LIMITE_MIN`, una variable contra un umbral). AI-04 pesa **juntas**
+la humedad de la tierra, la temperatura y el tiempo desde el último riego
+(criterio 1), y cambiar cualquiera de las tres puede cambiar el resultado
+(criterio 2).
+
+La lógica vive en `app/recommendation.py`, en funciones puras. Las tres
+variables mueven un mismo número, el **umbral**: la humedad de la tierra abajo
+de la cual conviene regar.
+
+| Qué | Cuánto mueve el umbral | Por qué |
+|---|---|---|
+| Base | 60 % (`SUELO_IDEAL_MIN`) | El mínimo ideal del rábano, del firmware |
+| Calor (arriba de 25 °C) | +1 por grado, hasta +5 | La tierra se seca más rápido: conviene regar antes |
+| Frío (abajo de 20 °C) | −1 por grado, hasta −5 | Se seca más lento: puede esperar |
+| Riego hace menos de 2 h | −8 | El agua todavía está bajando y el sensor tarda en verla: no regar dos veces |
+| Más de 24 h sin regar | +3 | Mejor no dejarlo más |
+| Límites | entre 50 % y 65 % | Nunca abajo del límite del rábano ni arriba de su ideal |
+
+Con el umbral decide la tierra: `too_wet` arriba de 80 %, `irrigate` abajo
+del umbral (`urgent` si además está abajo de 50 %), `irrigate_soon` hasta 3
+puntos arriba, `no_irrigation` lo demás. `irrigating` si la bomba sigue
+encendida e `insufficient_data` sin dato de la tierra. Si se recomienda regar
+con el tanque en nivel crítico, `tank_blocks` lo avisa.
+
+**Entradas.** Cada medición es la mediana de los últimos 5 min de lecturas
+(una lectura rara no hace saltar la recomendación); si la más reciente es más
+vieja que `SMARTGREENAI_READING_STALE_MINUTES`, esa medición no tiene dato. El
+último riego es el último encendido de la bomba en `actuator_events` (ACT-02).
+Sin temperatura o sin historial ese ajuste vale 0 y la entrada sale en
+`missing`. La respuesta trae las entradas tal como se usaron (`inputs`) y de
+dónde sale el umbral (`breakdown`).
+
+Es una **recomendación**: el riego lo sigue decidiendo el Arduino (automático)
+o una persona (manual). Aquí no se redacta ninguna explicación en lenguaje
+natural ni se muestra en el dashboard: eso es AI-05. Los puntos de cada
+ajuste son parámetros de análisis, pendientes de ajustar con datos reales
+del vivero.
+
 ### Ejemplos
 
 ```bash
@@ -394,14 +438,16 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-425 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (48, incluye el barrido de todas las rutas), actuadores
+457 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (50, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (41), espejo de las constantes del firmware (5),
 riego (31), frontend (19), histórico y gráficas (44), análisis (38), sensor
 de CO₂ (23, `test_co2.py`: ingesta, alertas, dashboard y la BD vieja de la
-Pi que gana la columna) y anomalías (41, `test_anomalies.py`: la regla pura,
-el riego que las explica y el endpoint).
+Pi que gana la columna), anomalías (41, `test_anomalies.py`: la regla pura,
+el riego que las explica y el endpoint) y recomendación de riego (30,
+`test_recommendation.py`: cada variable cambia el resultado, las orillas y
+el endpoint).
 
 La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
 
@@ -428,6 +474,7 @@ backend/
 │   ├── history.py       # Rango y resolución de una consulta histórica (DASH-02 / AI-01)
 │   ├── analysis.py      # Preprocesado y tendencias, en funciones puras (AI-01)
 │   ├── anomalies.py     # Detección de condiciones inusuales, en funciones puras (AI-02)
+│   ├── recommendation.py # Recomendación de riego con varias variables, en funciones puras (AI-04)
 │   ├── alerts.py        # Motor de alertas (ALERT-01)
 │   ├── irrigation.py    # Riego: modo, órdenes, confirmaciones y registro (ACT-02)
 │   └── routers/
@@ -436,6 +483,7 @@ backend/
 │       ├── actuators.py # CRUD sin DELETE (CONF-05) y órdenes manuales (ACT-02)
 │       ├── readings.py  # viveros, últimas lecturas (DASH-01) e histórico (DASH-02)
 │       ├── analysis.py  # tendencias (AI-01) y anomalías (AI-02) del vivero
+│       ├── recommendation.py # recomendación de riego (AI-04)
 │       ├── control.py   # estado de los equipos (ACT-04) y riego (ACT-02)
 │       └── alerts.py    # alertas del vivero (ALERT-01)
 ├── tests/

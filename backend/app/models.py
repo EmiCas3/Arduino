@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, StrictFloat, StrictInt, validator
 
 from app.analysis import TrendDirection
 from app.anomalies import AnomalyKind
+from app.recommendation import Outcome as RecommendationOutcome
 
 
 # ── Enums ──────────────────────────────────────────────────────────────
@@ -859,3 +860,68 @@ class GreenhouseAnomalies(BaseModel):
         default_factory=list, description="Las más recientes primero"
     )
     variables: List[AnomalyCheck]
+
+
+# ── Recomendación de riego (AI-04) ─────────────────────────────────────
+
+class MeasuredInput(BaseModel):
+    """Una medición que usó la recomendación, tal como se usó."""
+
+    value: Optional[float] = Field(
+        None, description="Mediana de las lecturas de los últimos minutos; null = sin dato"
+    )
+    unit: str
+    ts: Optional[datetime] = Field(None, description="Lectura más reciente que entró")
+    samples: int = Field(..., description="Lecturas que entraron a la mediana")
+
+
+class IrrigationInput(BaseModel):
+    """El último riego, según los encendidos de la bomba (ACT-02)."""
+
+    last_started_at: Optional[datetime] = Field(
+        None, description="Último encendido de la bomba; null = no hay registro"
+    )
+    hours_since: Optional[float] = None
+    irrigating: bool = Field(..., description="La bomba sigue encendida")
+
+
+class RecommendationInputs(BaseModel):
+    """Todo lo que consumió la recomendación (criterio 1 de AI-04)."""
+
+    soil: MeasuredInput
+    temperature: MeasuredInput
+    last_irrigation: IrrigationInput
+    tank: MeasuredInput
+
+
+class ThresholdBreakdown(BaseModel):
+    """De dónde sale el umbral: base + temperatura + último riego, acotado."""
+
+    base: float = Field(..., description="SUELO_IDEAL_MIN del firmware")
+    temperature: float = Field(..., description="Puntos por calor (+) o frío (-)")
+    last_irrigation: float = Field(..., description="Puntos por riego reciente (-) o muy viejo (+)")
+    min: float = Field(..., description="El umbral nunca baja de SUELO_LIMITE_MIN")
+    max: float = Field(..., description="El umbral nunca sube de SUELO_IDEAL_MAX")
+
+
+class IrrigationRecommendation(BaseModel):
+    greenhouse_id: str
+    generated_at: datetime
+    outcome: RecommendationOutcome = Field(
+        ..., description=(
+            "irrigate | irrigate_soon | no_irrigation | too_wet | irrigating | "
+            "insufficient_data"
+        ),
+    )
+    urgent: bool = Field(..., description="La tierra ya está abajo del límite del rábano")
+    tank_blocks: bool = Field(
+        ..., description="Se recomienda regar, pero el tanque está en nivel crítico"
+    )
+    threshold: float = Field(..., description="Humedad de la tierra abajo de la cual conviene regar")
+    watch_until: float = Field(..., description="Hasta esta humedad se recomienda regar pronto")
+    breakdown: ThresholdBreakdown
+    inputs: RecommendationInputs
+    missing: List[str] = Field(
+        default_factory=list,
+        description="Entradas sin dato (soil, temperature, last_irrigation, tank)",
+    )

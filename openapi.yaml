@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.7.0
+  version: 1.8.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -78,6 +78,16 @@ info:
     codigo del firmware y puede estar dentro de los limites del rabano. Los
     cambios que explica un riego (tierra que se moja, tanque que baja) no
     cuentan, y la luz no se revisa. Sin campos nuevos en las rutas existentes.
+
+    **v1.8.0 (Sprint 3, AI-04):** recomendacion de riego.
+    `GET /greenhouses/{greenhouse_id}/irrigation/recommendation` pesa juntas
+    la humedad de la tierra, la temperatura y el tiempo desde el ultimo riego:
+    las tres mueven el umbral de humedad abajo del cual conviene regar, y el
+    resultado es `irrigate`, `irrigate_soon`, `no_irrigation`, `too_wet`,
+    `irrigating` o `insufficient_data`. La respuesta trae las entradas tal
+    como se usaron y de donde sale el umbral. Es una recomendacion: el riego
+    lo sigue decidiendo el Arduino (automatico) o una persona (manual). Sin
+    campos nuevos en las rutas existentes.
 
     ## Convenciones que no se negocian
 
@@ -166,7 +176,7 @@ tags:
   - name: irrigation
     description: Riego automatico y manual (ACT-02)
   - name: analysis
-    description: Analisis de la informacion historica (AI-01) y condiciones inusuales (AI-02)
+    description: Analisis de la informacion historica (AI-01), condiciones inusuales (AI-02) y recomendacion de riego (AI-04)
 
 security:
   - ApiKeyAuth: []
@@ -628,6 +638,59 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/InvalidRange'
+
+  /greenhouses/{greenhouse_id}/irrigation/recommendation:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Background'
+    get:
+      tags: [analysis]
+      summary: Recomendacion de riego con temperatura, tierra y ultimo riego (AI-04)
+      description: |
+        Recomienda regar ahora, pronto o no, pesando juntas tres variables.
+
+        **El umbral.** Es la humedad de la tierra abajo de la cual conviene
+        regar. Parte de `SUELO_IDEAL_MIN` (60 %) y lo mueven:
+        - la temperatura: +1 punto por grado arriba de `TEMP_IDEAL_MAX`
+          (25 C), -1 por grado abajo de `TEMP_IDEAL_MIN` (20 C), hasta 5;
+        - el ultimo riego: -8 si fue hace menos de 2 h (el agua todavia
+          esta bajando), +3 si pasaron mas de 24 h.
+        Nunca sale de [`SUELO_LIMITE_MIN`, `SUELO_IDEAL_MAX`] (50-65 %).
+
+        **El resultado**, segun la humedad de la tierra: `insufficient_data`
+        sin dato; `irrigating` si la bomba sigue encendida; `too_wet` arriba
+        de `SUELO_LIMITE_MAX`; `irrigate` abajo del umbral (`urgent` si ademas
+        esta abajo de `SUELO_LIMITE_MIN`); `irrigate_soon` hasta 3 puntos
+        arriba del umbral; `no_irrigation` lo demas. `tank_blocks` avisa que
+        se recomienda regar pero el tanque esta en nivel critico.
+
+        **Las entradas.** Cada medicion es la mediana de sus lecturas de los
+        ultimos 5 min; una lectura mas vieja que el limite de "lectura vieja"
+        (15 min por defecto) no cuenta. El ultimo riego sale de los
+        encendidos de la bomba (ACT-02). Sin temperatura o sin historial, ese
+        ajuste vale 0 y la entrada sale en `missing`.
+
+        Es una recomendacion: el riego lo sigue decidiendo el Arduino
+        (automatico) o una persona (manual). No trae explicacion en lenguaje
+        natural: eso es AI-05.
+      operationId: getIrrigationRecommendation
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: La recomendacion, sus entradas y de donde sale el umbral
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IrrigationRecommendation'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   # ── Sprint 2: sesiones de usuario (AUTH-01 / AUTH-02) ─────────────────
 
@@ -2611,6 +2674,123 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnomalyCheck'
+
+    MeasuredInput:
+      type: object
+      description: Una medicion que uso la recomendacion, tal como se uso (AI-04).
+      required: [unit, samples]
+      properties:
+        value:
+          type: number
+          nullable: true
+          description: Mediana de las lecturas de los ultimos 5 min; null = sin dato
+          example: 55.0
+        unit:
+          type: string
+          example: '%'
+        ts:
+          type: string
+          format: date-time
+          nullable: true
+          description: Lectura mas reciente que entro
+        samples:
+          type: integer
+          description: Lecturas que entraron a la mediana
+          example: 150
+
+    IrrigationInput:
+      type: object
+      description: El ultimo riego, segun los encendidos de la bomba (ACT-02).
+      required: [irrigating]
+      properties:
+        last_started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Ultimo encendido de la bomba; null = no hay registro
+        hours_since:
+          type: number
+          nullable: true
+          example: 6.25
+        irrigating:
+          type: boolean
+          description: La bomba sigue encendida
+
+    RecommendationInputs:
+      type: object
+      description: Todo lo que consumio la recomendacion.
+      required: [soil, temperature, last_irrigation, tank]
+      properties:
+        soil:
+          $ref: '#/components/schemas/MeasuredInput'
+        temperature:
+          $ref: '#/components/schemas/MeasuredInput'
+        last_irrigation:
+          $ref: '#/components/schemas/IrrigationInput'
+        tank:
+          $ref: '#/components/schemas/MeasuredInput'
+
+    ThresholdBreakdown:
+      type: object
+      description: De donde sale el umbral (base + temperatura + ultimo riego, acotado).
+      required: [base, temperature, last_irrigation, min, max]
+      properties:
+        base:
+          type: number
+          example: 60.0
+        temperature:
+          type: number
+          description: Puntos por calor (+) o frio (-)
+          example: 2.0
+        last_irrigation:
+          type: number
+          description: Puntos por riego reciente (-) o muy viejo (+)
+          example: 0.0
+        min:
+          type: number
+          example: 50.0
+        max:
+          type: number
+          example: 65.0
+
+    IrrigationRecommendation:
+      type: object
+      required:
+        [greenhouse_id, generated_at, outcome, urgent, tank_blocks, threshold,
+         watch_until, breakdown, inputs, missing]
+      properties:
+        greenhouse_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        outcome:
+          type: string
+          enum: [irrigate, irrigate_soon, no_irrigation, too_wet, irrigating, insufficient_data]
+        urgent:
+          type: boolean
+          description: La tierra ya esta abajo del limite del rabano
+        tank_blocks:
+          type: boolean
+          description: Se recomienda regar, pero el tanque esta en nivel critico
+        threshold:
+          type: number
+          description: Humedad de la tierra abajo de la cual conviene regar
+          example: 62.0
+        watch_until:
+          type: number
+          description: Hasta esta humedad se recomienda regar pronto
+          example: 65.0
+        breakdown:
+          $ref: '#/components/schemas/ThresholdBreakdown'
+        inputs:
+          $ref: '#/components/schemas/RecommendationInputs'
+        missing:
+          type: array
+          description: Entradas sin dato
+          items:
+            type: string
+            enum: [soil, temperature, last_irrigation, tank]
 
     ErrorDetail:
       type: object

@@ -17,7 +17,7 @@ from app.config import settings
 from app.database import close_db, init_db
 from app.routers import actuators, alerts, analysis, control
 from app.routers import auth as auth_routes
-from app.routers import ingest, readings
+from app.routers import ingest, readings, recommendation
 
 
 @asynccontextmanager
@@ -57,6 +57,7 @@ app.include_router(readings.router, prefix="/api/v1")
 app.include_router(control.router, prefix="/api/v1")
 app.include_router(alerts.router, prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
+app.include_router(recommendation.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

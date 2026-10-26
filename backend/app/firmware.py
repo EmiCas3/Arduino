@@ -5,8 +5,11 @@ Los umbrales del rábano y los parámetros de riego viven en el código del
 Arduino: él compara cada lectura, manda códigos como `TEMP_ALTA` o
 `SUELO_SECO` y decide el riego automático. El backend no vuelve a comparar
 ni a decidir nada; este módulo solo sirve para ANOTAR en cada alerta
-(ALERT-01) qué umbral cruzó, y para EXPLICAR en la UI y en el registro de
-riegos (ACT-02) con qué objetivo y tiempo máximo trabaja el Arduino.
+(ALERT-01) qué umbral cruzó, para EXPLICAR en la UI y en el registro de
+riegos (ACT-02) con qué objetivo y tiempo máximo trabaja el Arduino, y para
+que la recomendación de riego (AI-04) parta del mismo rango ideal que el
+Arduino. La recomendación no decide nada: el riego lo sigue decidiendo el
+Arduino (automático) o una persona (manual).
 
 Si alguien cambia un umbral en el `.ino`, `tests/test_firmware_mirror.py`
 falla y dice qué línea de aquí corregir. Así el número que guarda la alerta
@@ -39,6 +42,11 @@ CONSTANTS: Dict[str, float] = {
     "NIVEL_PCT_CRITICO": 25,
     "CO2_LIMITE_MIN": 300,
     "CO2_LIMITE_MAX": 1500,
+    # Rango ideal del rábano: la recomendación de riego (AI-04) parte de aquí
+    "TEMP_IDEAL_MIN": 20.0,
+    "TEMP_IDEAL_MAX": 25.0,
+    "SUELO_IDEAL_MIN": 60,
+    "SUELO_IDEAL_MAX": 65,
     # Riego (ACT-02): el objetivo es SUELO_LIMITE_MIN
     "BOMBA_MAX_MS": 60_000,
     "BOMBA_DESCANSO_MS": 300_000,
