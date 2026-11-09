@@ -4,10 +4,10 @@ Documentación de la API en SwaggerHub (v1.7.0):
 https://app.swaggerhub.com/apis/upaep-5f9/smartgreenai-radish-crop-api-3/1.7.0
 
 La fuente oficial del contrato es `openapi.yaml` de este repositorio
-(**v1.8.0**, Sprint 3: histórico y gráficas de DASH-02, análisis de AI-01,
-sensor de CO₂ de NF-01, condiciones inusuales de AI-02 y recomendación de
-riego de AI-04). La copia de SwaggerHub todavía es la v1.7.0: falta subir
-la v1.8.0.
+(**v1.9.0**, Sprint 3: histórico y gráficas de DASH-02, análisis de AI-01,
+sensor de CO₂ de NF-01, condiciones inusuales de AI-02, recomendación de
+riego de AI-04 y su explicación de AI-05). La copia de SwaggerHub todavía es
+la v1.7.0: falta subir la v1.9.0.
 SwaggerHub tiene una copia: cada vez que cambie la versión de `openapi.yaml`
 hay que subirla ahí y actualizar este link. Las versiones anteriores se
 publicaron en otras cuentas de SwaggerHub cuya prueba ya venció (hasta la

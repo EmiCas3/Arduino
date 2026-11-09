@@ -40,8 +40,8 @@ recomendación, pero si está en NIVEL_PCT_CRITICO se avisa que el Arduino no
 dejaría regar (`tank_blocks`).
 
 Es una RECOMENDACIÓN, no una orden: el riego lo sigue decidiendo el Arduino
-(automático) o una persona (manual, ACT-02). Aquí no se redacta ninguna
-explicación en lenguaje natural: eso es AI-05.
+(automático) o una persona (manual, ACT-02). La explicación en lenguaje claro
+se redacta en app/explanation.py (AI-05).
 
 Funciones puras, como app/analysis.py: sin FastAPI, sin BD, sin reloj. Las
 mismas entradas dan la misma recomendación.

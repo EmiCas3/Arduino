@@ -1,7 +1,8 @@
 """
-Recomendación de riego del vivero (AI-04).
+Recomendación de riego del vivero (AI-04) y su explicación (AI-05).
 
     GET /greenhouses/{greenhouse_id}/irrigation/recommendation
+    GET /greenhouses/{greenhouse_id}/irrigation/recommendations
 
 Junta lo que consume la recomendación — humedad de la tierra, temperatura,
 último riego y, como aviso, el tanque — y le pasa todo a app/recommendation.py,
@@ -21,6 +22,12 @@ que es puro. Aquí solo se leen las entradas de la BD.
 La respuesta trae las entradas tal como se usaron y de dónde sale el umbral,
 para que la misma recomendación se pueda revisar después.
 
+Guardado (AI-05): la recomendación se calcula al consultarla, y si es distinta
+de la última guardada del vivero se guarda tal cual, con sus entradas y su
+explicación. Con el refresco del dashboard, guardar cada consulta llenaría la
+tabla con copias. Una recomendación sin explicación no se guarda ni se devuelve
+(criterio 4 de AI-05).
+
 Permisos (AUTH-02): todos los roles; un productor solo su vivero.
 """
 
@@ -29,7 +36,7 @@ from statistics import median
 from typing import List, Optional
 
 import aiosqlite
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app import history
 from app import metrics as metric_catalog
@@ -43,11 +50,14 @@ from app.dependencies import (
     require_roles,
     utcnow,
 )
+from app.explanation import explain, is_explained
 from app.models import (
     ErrorResponse,
     IrrigationInput,
     IrrigationRecommendation,
     MeasuredInput,
+    RecommendationExplanation,
+    RecommendationHistory,
     RecommendationInputs,
     ThresholdBreakdown,
 )
@@ -65,13 +75,14 @@ SMOOTHING_MINUTES = 5
 @router.get(
     "/{greenhouse_id}/irrigation/recommendation",
     response_model=IrrigationRecommendation,
-    responses={code: {"model": ErrorResponse} for code in (401, 403)},
+    responses={code: {"model": ErrorResponse} for code in (401, 403, 503)},
     summary="Recomendación de riego con temperatura, tierra y último riego",
     description=(
         "Recomienda regar ahora, pronto o no, pesando juntas la humedad de la "
         "tierra, la temperatura y el tiempo desde el último riego. Las tres "
         "mueven el umbral de humedad abajo del cual conviene regar; la "
-        "respuesta trae las entradas que se usaron y de dónde sale el umbral. "
+        "respuesta trae la explicación en lenguaje claro, las entradas que se "
+        "usaron y de dónde sale el umbral. "
         "Es una recomendación: el riego lo sigue decidiendo el Arduino "
         "(automático) o una persona (manual)."
     ),
@@ -90,13 +101,18 @@ async def irrigation_recommendation(
     tank = await _measured(db, greenhouse_id, "nivel_pct", cutoff)
     irrigation = await _last_irrigation(db, greenhouse_id, now)
 
-    result = recommendation.recommend(recommendation.Inputs(
+    engine_inputs = recommendation.Inputs(
         soil_pct=soil.value,
         temp_c=temperature.value,
         hours_since_irrigation=irrigation.hours_since,
         irrigating=irrigation.irrigating,
         tank_pct=tank.value,
-    ))
+    )
+    result = recommendation.recommend(engine_inputs)
+    explanation = explain(engine_inputs, result)
+    if not is_explained(explanation):
+        raise HTTPException(503, "La recomendación no tiene explicación: no se muestra.")
+
     missing: List[str] = [
         name for name, absent in (
             ("soil", soil.value is None),
@@ -105,12 +121,17 @@ async def irrigation_recommendation(
             ("tank", tank.value is None),
         ) if absent
     ]
-    return IrrigationRecommendation(
+    response = IrrigationRecommendation(
         greenhouse_id=greenhouse_id,
         generated_at=now,
         outcome=result.outcome,
         urgent=result.urgent,
         tank_blocks=result.tank_blocks,
+        explanation=RecommendationExplanation(
+            summary=explanation.summary,
+            reasons=explanation.reasons,
+            notes=explanation.notes,
+        ),
         threshold=result.threshold,
         watch_until=result.watch_until,
         breakdown=ThresholdBreakdown(
@@ -125,6 +146,69 @@ async def irrigation_recommendation(
         ),
         missing=missing,
     )
+    await _store_if_changed(db, response)
+    return response
+
+
+@router.get(
+    "/{greenhouse_id}/irrigation/recommendations",
+    response_model=RecommendationHistory,
+    responses={code: {"model": ErrorResponse} for code in (401, 403)},
+    summary="Recomendaciones guardadas, con sus entradas exactas",
+    description=(
+        "Las recomendaciones que se guardaron, de la más reciente a la más "
+        "vieja, tal como se mostraron: su explicación y las entradas que usaron."
+    ),
+)
+async def stored_recommendations(
+    greenhouse_id: str = Path(..., min_length=1, max_length=64),
+    limit: int = Query(10, ge=1, le=50),
+    user: dict = Depends(require_roles(*ALL_ROLES)),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> RecommendationHistory:
+    ensure_greenhouse_access(user, greenhouse_id)
+    cursor = await db.execute(
+        """
+        SELECT payload FROM irrigation_recommendations
+        WHERE greenhouse_id = ?
+        ORDER BY id DESC LIMIT ?
+        """,
+        (greenhouse_id, limit),
+    )
+    return RecommendationHistory(
+        greenhouse_id=greenhouse_id,
+        items=[
+            IrrigationRecommendation.parse_raw(row["payload"])
+            for row in await cursor.fetchall()
+        ],
+    )
+
+
+async def _store_if_changed(
+    db: aiosqlite.Connection, current: IrrigationRecommendation
+) -> None:
+    """Guarda la recomendación si dice algo distinto de la última guardada."""
+    cursor = await db.execute(
+        """
+        SELECT outcome, urgent, tank_blocks FROM irrigation_recommendations
+        WHERE greenhouse_id = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (current.greenhouse_id,),
+    )
+    last = await cursor.fetchone()
+    key = (current.outcome.value, int(current.urgent), int(current.tank_blocks))
+    if last is not None and tuple(last) == key:
+        return
+    await db.execute(
+        """
+        INSERT INTO irrigation_recommendations
+            (greenhouse_id, outcome, urgent, tank_blocks, payload, generated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (current.greenhouse_id, *key, current.json(), history.ts_text(current.generated_at)),
+    )
+    await db.commit()
 
 
 async def _measured(

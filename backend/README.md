@@ -13,6 +13,7 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 | AI-01 | Análisis de la información histórica: tendencia por variable, con el periodo usado y la calidad del dato |
 | AI-02 | Condiciones inusuales: lo que se sale del patrón reciente de su sensor, con valor, rango esperado y hora |
 | AI-04 | Recomendación de riego que pesa juntas la humedad de la tierra, la temperatura y el tiempo desde el último riego |
+| AI-05 | Explicación en lenguaje claro de cada recomendación, y recomendaciones guardadas con sus entradas exactas |
 
 También sirve el frontend (`../frontend`) desde el mismo origen.
 
@@ -111,9 +112,10 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/analysis` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/anomalies` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/irrigation/recommendation` | Bearer | todos (productor: solo su vivero) |
+| GET | `/greenhouses/{greenhouse_id}/irrigation/recommendations` | Bearer | todos (productor: solo su vivero) |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.8.0).
+El contrato completo está en `../openapi.yaml` (v1.9.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -340,10 +342,26 @@ Sin temperatura o sin historial ese ajuste vale 0 y la entrada sale en
 dónde sale el umbral (`breakdown`).
 
 Es una **recomendación**: el riego lo sigue decidiendo el Arduino (automático)
-o una persona (manual). Aquí no se redacta ninguna explicación en lenguaje
-natural ni se muestra en el dashboard: eso es AI-05. Los puntos de cada
-ajuste son parámetros de análisis, pendientes de ajustar con datos reales
-del vivero.
+o una persona (manual). Los puntos de cada ajuste son parámetros de análisis,
+pendientes de ajustar con datos reales del vivero.
+
+### Explicación de la recomendación (AI-05)
+
+La respuesta trae `explanation`, que redacta `app/explanation.py` en funciones
+puras: `summary` (qué se recomienda), `reasons` (las mediciones que lo causaron,
+con sus valores) y `notes` (lo que faltó medir y si el tanque impide regar).
+El texto no lleva identificadores, fórmulas ni códigos; `test_explanation.py`
+lo revisa en todas las combinaciones de entradas.
+
+**Se guarda lo que cambia.** Al consultar la recomendación, si `outcome`,
+`urgent` o `tank_blocks` son distintos de la última guardada del vivero, se
+guarda la respuesta completa en `irrigation_recommendations`.
+`GET /greenhouses/{id}/irrigation/recommendations?limit=10` las devuelve tal
+como se mostraron, con sus entradas exactas. Solo se guarda cuando alguien
+consulta: sin nadie viendo el dashboard no se generan recomendaciones.
+
+**Sin explicación no se muestra.** Si `is_explained()` no aprueba el texto, el
+endpoint responde 503 y no guarda nada.
 
 ### Ejemplos
 
@@ -438,16 +456,17 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-459 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+498 tests: ingesta (9), horas y validación parcial de la ingesta (24),
 login (22), roles (50, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (41), espejo de las constantes del firmware (5),
-riego (31), frontend (19), histórico y gráficas (44), análisis (38), sensor
+riego (31), frontend (20), histórico y gráficas (44), análisis (38), sensor
 de CO₂ (23, `test_co2.py`: ingesta, alertas, dashboard y la BD vieja de la
 Pi que gana la columna), anomalías (41, `test_anomalies.py`: la regla pura,
 el riego que las explica y el endpoint), recomendación de riego (30,
 `test_recommendation.py`: cada variable cambia el resultado, las orillas y
-el endpoint) y contrato (2, `test_contract.py`: la versión de la app es la
+el endpoint), explicación de la recomendación (36, `test_explanation.py`: el
+texto, lo guardado y que sin explicación no se muestra) y contrato (2, `test_contract.py`: la versión de la app es la
 de `openapi.yaml` y todo endpoint de `/api/v1` está documentado ahí).
 
 La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
@@ -476,6 +495,7 @@ backend/
 │   ├── analysis.py      # Preprocesado y tendencias, en funciones puras (AI-01)
 │   ├── anomalies.py     # Detección de condiciones inusuales, en funciones puras (AI-02)
 │   ├── recommendation.py # Recomendación de riego con varias variables, en funciones puras (AI-04)
+│   ├── explanation.py   # Explicación de la recomendación en lenguaje claro, en funciones puras (AI-05)
 │   ├── alerts.py        # Motor de alertas (ALERT-01)
 │   ├── irrigation.py    # Riego: modo, órdenes, confirmaciones y registro (ACT-02)
 │   └── routers/
@@ -484,7 +504,7 @@ backend/
 │       ├── actuators.py # CRUD sin DELETE (CONF-05) y órdenes manuales (ACT-02)
 │       ├── readings.py  # viveros, últimas lecturas (DASH-01) e histórico (DASH-02)
 │       ├── analysis.py  # tendencias (AI-01) y anomalías (AI-02) del vivero
-│       ├── recommendation.py # recomendación de riego (AI-04)
+│       ├── recommendation.py # recomendación de riego (AI-04) y las guardadas (AI-05)
 │       ├── control.py   # estado de los equipos (ACT-04) y riego (ACT-02)
 │       └── alerts.py    # alertas del vivero (ALERT-01)
 ├── tests/

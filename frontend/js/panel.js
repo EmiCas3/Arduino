@@ -2,8 +2,8 @@
  * Panel principal: shell con menú por rol (AUTH-02) y pantallas de inicio.
  *
  * Secciones (roles.js):
- *   #/inicio         todos           lecturas en vivo (DASH-01), alertas (ALERT-01) y
- *                                    estado de los equipos (ACT-04)
+ *   #/inicio         todos           lecturas en vivo (DASH-01), recomendación de riego
+ *                                    (AI-05), alertas (ALERT-01) y estado de los equipos (ACT-04)
  *   #/historial      todos           gráficas históricas (DASH-02) y tendencias (AI-01)
  *   #/configuracion  admin, super    actuadores registrados (CONF-05)
  *   #/plataforma     super           permisos por rol y módulos próximos
@@ -17,6 +17,7 @@ import { mountAnomalies } from "./anomalies.js";
 import { mountLiveReadings } from "./dashboard.js";
 import { mountEquipment } from "./equipment.js";
 import { mountHistory } from "./history.js";
+import { mountRecommendation } from "./recommendation.js";
 import { clearSession, loadSession, setFlash } from "./session.js";
 import {
   ACTUATOR_TYPES,
@@ -202,6 +203,8 @@ function renderInicio() {
   const equipmentBody = h("div", {}, loadingLines());
   const picker = h("div", { class: "greenhouse-picker" });
   const liveBody = h("div", { class: "live" }, loadingLines());
+  const recommendationBody = h("div", { class: "alerts" }, loadingLines(2));
+  const recommendationPill = h("div", { class: "alerts-count" });
   const alertsBody = h("div", { class: "alerts" }, loadingLines(2));
   const alertsCount = h("div", { class: "alerts-count" });
   const anomaliesBody = h("div", { class: "alerts" }, loadingLines(2));
@@ -230,6 +233,10 @@ function renderInicio() {
           picker),
         liveBody),
 
+      h("section", { class: "card span-12", "aria-labelledby": "t-riego" },
+        cardHead("Recomendación de riego", "Qué conviene hacer con el riego y por qué, según la tierra, la temperatura y el último riego.", recommendationPill, "t-riego"),
+        recommendationBody),
+
       h("section", { class: "card span-12", "aria-labelledby": "t-alertas" },
         cardHead("Alertas", "Cuando el Arduino reporta que una medición cruzó su límite. Aparecen solas, sin recargar.", alertsCount, "t-alertas"),
         alertsBody),
@@ -256,22 +263,25 @@ function renderInicio() {
     ),
   );
   startLiveReadings({
-    body: liveBody, picker, equipmentBody, alertsBody, alertsCount, anomaliesBody, anomaliesCount,
+    body: liveBody, picker, equipmentBody, recommendationBody, recommendationPill,
+    alertsBody, alertsCount, anomaliesBody, anomaliesCount,
   });
 }
 
 /**
- * Arranca los widgets en vivo (DASH-01, ALERT-01, AI-02, ACT-04) en el vivero
+ * Arranca los widgets en vivo (DASH-01, AI-05, ALERT-01, AI-02, ACT-04) en el vivero
  * del usuario, o en el que elija un admin. Todos se detienen juntos al salir
  * de la vista o al cambiar de vivero.
  */
 function startLiveReadings({
-  body, picker, equipmentBody, alertsBody, alertsCount, anomaliesBody, anomaliesCount,
+  body, picker, equipmentBody, recommendationBody, recommendationPill,
+  alertsBody, alertsCount, anomaliesBody, anomaliesCount,
 }) {
   return withGreenhouse({
     picker,
     mount: (greenhouseId) => [
       mountLiveReadings(body, greenhouseId),
+      mountRecommendation(recommendationBody, greenhouseId, recommendationPill),
       mountAlerts(alertsBody, greenhouseId, alertsCount),
       mountAnomalies(anomaliesBody, greenhouseId, anomaliesCount),
       mountEquipment(equipmentBody, greenhouseId),
@@ -279,11 +289,13 @@ function startLiveReadings({
     onError: (error) => {
       body.replaceChildren(errorNotice(error));
       equipmentBody.replaceChildren();
+      recommendationBody.replaceChildren();
       alertsBody.replaceChildren();
       anomaliesBody.replaceChildren();
     },
     onEmpty: () => {
       equipmentBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay equipos que mostrar."));
+      recommendationBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay nada que recomendar."));
       alertsBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay alertas."));
       anomaliesBody.replaceChildren(h("div", { class: "empty" }, "Sin vivero no hay nada que comparar."));
       body.replaceChildren(noGreenhouseNotice());

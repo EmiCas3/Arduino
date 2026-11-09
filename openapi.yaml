@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.8.0
+  version: 1.9.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -88,6 +88,14 @@ info:
     como se usaron y de donde sale el umbral. Es una recomendacion: el riego
     lo sigue decidiendo el Arduino (automatico) o una persona (manual). Sin
     campos nuevos en las rutas existentes.
+
+    **v1.9.0 (Sprint 3, AI-05):** explicacion de la recomendacion. La
+    respuesta de `/irrigation/recommendation` agrega `explanation`: que se
+    recomienda y que mediciones lo causaron, en lenguaje claro, sin
+    identificadores, formulas ni codigos. Cada recomendacion distinta se guarda
+    tal como se mostro y `GET /greenhouses/{greenhouse_id}/irrigation/recommendations`
+    las devuelve con sus entradas exactas. Una recomendacion sin explicacion no
+    se muestra ni se guarda (503).
 
     ## Convenciones que no se negocian
 
@@ -675,8 +683,13 @@ paths:
         ajuste vale 0 y la entrada sale en `missing`.
 
         Es una recomendacion: el riego lo sigue decidiendo el Arduino
-        (automatico) o una persona (manual). No trae explicacion en lenguaje
-        natural: eso es AI-05.
+        (automatico) o una persona (manual).
+
+        **La explicacion (AI-05).** `explanation` dice en lenguaje claro que se
+        recomienda y que mediciones lo causaron. Si la recomendacion no tiene
+        explicacion responde 503: no se muestra ni se guarda. Cada consulta
+        que da un resultado distinto del ultimo guardado (`outcome`, `urgent`
+        o `tank_blocks`) lo guarda tal cual.
       operationId: getIrrigationRecommendation
       security:
         - BearerAuth: []
@@ -687,6 +700,52 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/IrrigationRecommendation'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          description: La recomendacion no tiene explicacion y no se muestra
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+
+  /greenhouses/{greenhouse_id}/irrigation/recommendations:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 64
+    get:
+      tags: [analysis]
+      summary: Recomendaciones guardadas, con sus entradas exactas
+      description: |
+        Las recomendaciones guardadas del vivero, de la mas reciente a la mas
+        vieja, tal como se mostraron: su explicacion y las entradas que usaron.
+        Lecturas posteriores no las cambian. Todos los roles; un productor
+        solo su vivero.
+      operationId: listIrrigationRecommendations
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: Las recomendaciones guardadas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationHistory'
         '401':
           $ref: '#/components/responses/SessionRequired'
         '403':
@@ -2753,11 +2812,44 @@ components:
           type: number
           example: 65.0
 
+    RecommendationExplanation:
+      type: object
+      description: La explicacion en lenguaje claro de una recomendacion (AI-05).
+      required: [summary, reasons, notes]
+      properties:
+        summary:
+          type: string
+          example: Conviene regar ahora.
+        reasons:
+          type: array
+          minItems: 1
+          description: Las mediciones que lo causaron
+          items:
+            type: string
+          example:
+            - La tierra esta en 58 % de humedad, y en este momento conviene regar con menos de 62 %.
+        notes:
+          type: array
+          description: Lo que falto medir y lo que impide regar
+          items:
+            type: string
+
+    RecommendationHistory:
+      type: object
+      required: [greenhouse_id, items]
+      properties:
+        greenhouse_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IrrigationRecommendation'
+
     IrrigationRecommendation:
       type: object
       required:
-        [greenhouse_id, generated_at, outcome, urgent, tank_blocks, threshold,
-         watch_until, breakdown, inputs, missing]
+        [greenhouse_id, generated_at, outcome, urgent, tank_blocks, explanation,
+         threshold, watch_until, breakdown, inputs, missing]
       properties:
         greenhouse_id:
           type: string
@@ -2773,6 +2865,8 @@ components:
         tank_blocks:
           type: boolean
           description: Se recomienda regar, pero el tanque esta en nivel critico
+        explanation:
+          $ref: '#/components/schemas/RecommendationExplanation'
         threshold:
           type: number
           description: Humedad de la tierra abajo de la cual conviene regar
