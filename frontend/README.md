@@ -40,6 +40,7 @@ frontend/
 │   ├── metrics.js    → estados y textos de los widgets (lógica pura, sin DOM)
 │   ├── alerts.js     → ALERT-01: tarjeta "Alertas", avisos flotantes y contador
 │   ├── anomalies.js  → AI-02: tarjeta "Condiciones inusuales" (aviso temprano)
+│   ├── recommendation.js → AI-05: tarjeta "Recomendación de riego" con su explicación
 │   ├── equipment.js  → ACT-04 y ACT-02: estado de los equipos y control del riego
 │   ├── poller.js     → refresco cada 15 s compartido por los widgets nuevos
 │   ├── history.js    → DASH-02 y AI-01: vista "Historial" (gráfica + tendencias)
@@ -131,6 +132,21 @@ crea el backend cuando el Arduino reporta que una medición cruzó su límite
   las que llegan después.
 - Los umbrales viven en el firmware: el número del límite llega de la API,
   no hay umbrales en JavaScript.
+
+## Recomendación de riego (AI-05)
+
+La tarjeta "Recomendación de riego" de "Mi vivero" (`recommendation.js`), justo
+debajo de "Estado actual", muestra lo que devuelve
+`GET /greenhouses/{id}/irrigation/recommendation`.
+
+- **Qué y por qué:** qué conviene hacer y las mediciones que lo causaron, con
+  el texto que redacta el backend. Aquí no se redacta nada.
+- **"Datos que se usaron":** las entradas exactas, sin redondear, con cuántas
+  lecturas entraron y la hora de la última.
+- **"Recomendaciones anteriores":** las guardadas, con sus propias entradas.
+- **Sin explicación no se muestra:** `describeRecommendation()` devuelve `null`
+  y un 503 quita también la que estaba en pantalla.
+- Se refresca sola cada minuto, y un detalle abierto sigue abierto.
 
 ## Condiciones inusuales (AI-02)
 
@@ -229,8 +245,8 @@ La sección "Historial" (`history.js`) tiene dos tarjetas:
 medición, si va subiendo, estable o bajando, con el cambio del periodo y la
 calidad del dato ("cobertura 89.6 % · 2 huecos · 2 h 30 min · 20 sin dato del
 sensor"). El periodo y el paso usados se muestran arriba, porque el indicador
-no significa nada sin ellos. La explicación en lenguaje natural es AI-05: aquí
-solo se muestran los números que devuelve el análisis. El cambio se escribe
+no significa nada sin ellos. Aquí solo se muestran los números que devuelve el
+análisis. El cambio se escribe
 con los decimales de la medición, salvo que el redondeo contradiga el
 indicador (`formatChange()`): una humedad que cambió 1.6 ("Estable", banda
 de 2) sale "+1.6 % HR", no "+2 % HR" como una que sí sube.
@@ -309,11 +325,8 @@ empezado con React + Vite.
    máximo de cada uno.
 4. **Vistas de AI.** AI-01 ✅ (tarjetas de tendencia en "Historial"). AI-02 ✅
    (tarjeta "Condiciones inusuales" en "Mi vivero"; reutiliza el acomodo de
-   `.alert-item` con colores propios). AI-04 ✅ solo en la API
-   (`/irrigation/recommendation`): la recomendación se muestra con AI-05,
-   porque una recomendación sin su explicación en lenguaje claro no se debe
-   mostrar (criterio 4 de AI-05). Falta AI-05; reutiliza `.card`, `.notice`
-   y `.pill`.
+   `.alert-item` con colores propios). AI-04 y AI-05 ✅ (tarjeta
+   "Recomendación de riego" en "Mi vivero").
 
 ### Sprint 4 (integración)
 

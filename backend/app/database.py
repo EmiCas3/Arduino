@@ -252,6 +252,20 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
         );
         CREATE INDEX IF NOT EXISTS ix_events_greenhouse
             ON actuator_events(greenhouse_id, reading_ts);
+
+        -- AI-05: cada recomendacion de riego distinta, con sus entradas y su
+        -- explicacion tal como se mostraron (`payload` es la respuesta en JSON).
+        CREATE TABLE IF NOT EXISTS irrigation_recommendations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            greenhouse_id TEXT NOT NULL,
+            outcome       TEXT NOT NULL,
+            urgent        INTEGER NOT NULL,
+            tank_blocks   INTEGER NOT NULL,
+            payload       TEXT NOT NULL,
+            generated_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_recommendations_greenhouse
+            ON irrigation_recommendations(greenhouse_id, id);
     """)
     # NF-01: la BD de la Pi se creó antes del CO₂ (ver la nota de arriba).
     cursor = await _db.execute("PRAGMA table_info(readings)")

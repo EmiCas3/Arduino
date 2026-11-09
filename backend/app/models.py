@@ -904,6 +904,16 @@ class ThresholdBreakdown(BaseModel):
     max: float = Field(..., description="El umbral nunca sube de SUELO_IDEAL_MAX")
 
 
+class RecommendationExplanation(BaseModel):
+    """La explicación en lenguaje claro de una recomendación (AI-05)."""
+
+    summary: str = Field(..., description="Qué se recomienda")
+    reasons: List[str] = Field(..., description="Las mediciones que lo causaron")
+    notes: List[str] = Field(
+        default_factory=list, description="Lo que faltó medir y lo que impide regar"
+    )
+
+
 class IrrigationRecommendation(BaseModel):
     greenhouse_id: str
     generated_at: datetime
@@ -919,9 +929,17 @@ class IrrigationRecommendation(BaseModel):
     )
     threshold: float = Field(..., description="Humedad de la tierra abajo de la cual conviene regar")
     watch_until: float = Field(..., description="Hasta esta humedad se recomienda regar pronto")
+    explanation: RecommendationExplanation
     breakdown: ThresholdBreakdown
     inputs: RecommendationInputs
     missing: List[str] = Field(
         default_factory=list,
         description="Entradas sin dato (soil, temperature, last_irrigation, tank)",
     )
+
+
+class RecommendationHistory(BaseModel):
+    """Las recomendaciones guardadas de un vivero, la más reciente primero."""
+
+    greenhouse_id: str
+    items: List[IrrigationRecommendation]

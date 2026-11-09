@@ -22,6 +22,7 @@ const {
   commandFeedback,
   describeAlert,
   describeAnomaly,
+  describeRecommendation,
   eventText,
   formatDuration,
   formatMeasure,
@@ -171,7 +172,9 @@ test("resumen de la última lectura del Arduino", () => {
     estado: "ALERTA", alertas: ["SUELO_SECO"], riego_sugerido: true,
     bomba_habilitada: false, vent: "ALTA", es_dia: true,
   });
-  assert.deepEqual(chips.map((c) => c.tone), ["crit", "warn", "crit", "plain", "plain"]);
+  assert.deepEqual(chips.map((c) => c.tone), ["crit", "crit", "plain", "plain"]);
+  // AI-05: la sugerencia de riego del Arduino no trae explicación, no se muestra.
+  assert.ok(!chips.some((c) => c.text.includes("Riego")));
   assert.deepEqual(summarize(null), []);
   assert.deepEqual(summarize({ estado: "OK", alertas: [], riego_sugerido: false, bomba_habilitada: true, vent: "BASE", es_dia: false })
     .map((c) => c.text), ["Arduino: todo en rango", "Ventilación base", "De noche"]);
@@ -359,4 +362,50 @@ test("la tarjeta muestra todas las que siguen y solo las 5 pasadas más reciente
   const { ongoing, past } = visibleAnomalies(list);
   assert.deepEqual(ongoing.map((a) => a.id), ["a"]);
   assert.deepEqual(past.map((a) => a.id), ["p0", "p1", "p2", "p3", "p4"]);
+});
+
+// ── Recomendación de riego (AI-05) ────────────────────────────────────
+
+const RECOMMENDATION = {
+  outcome: "irrigate",
+  urgent: false,
+  threshold: 62,
+  explanation: { summary: "Conviene regar ahora.", reasons: ["La tierra está en 58.5 % de humedad."], notes: [] },
+  inputs: {
+    soil: { value: 58.5, unit: "%", ts: "2026-05-01T14:21:00Z", samples: 12 },
+    temperature: { value: null, unit: "°C", ts: null, samples: 0 },
+    last_irrigation: { last_started_at: "2026-05-01T08:00:00Z", hours_since: 6, irrigating: false },
+    tank: { value: 70, unit: "%", ts: "2026-05-01T14:21:00Z", samples: 1 },
+  },
+};
+
+test("una recomendación muestra su explicación y sus entradas exactas", () => {
+  const view = describeRecommendation(RECOMMENDATION, clock);
+  assert.equal(view.summary, "Conviene regar ahora.");
+  assert.deepEqual(view.reasons, ["La tierra está en 58.5 % de humedad."]);
+  assert.deepEqual(view.inputs[0], {
+    label: "Humedad de la tierra", value: "58.5 %", detail: "12 lecturas, la última a las 14:21",
+  });
+  assert.equal(view.inputs[1].value, "Sin dato");
+  assert.equal(view.inputs[2].value, "hace 6 h");
+  assert.equal(view.inputs[3].detail, "1 lectura, la última a las 14:21");
+  assert.equal(view.inputs[4].value, "62 %");
+});
+
+test("una recomendación sin explicación no se muestra", () => {
+  for (const explanation of [
+    undefined,
+    null,
+    { summary: "", reasons: ["algo"], notes: [] },
+    { summary: "  ", reasons: ["algo"], notes: [] },
+    { summary: "Regar.", reasons: [], notes: [] },
+    { summary: "Regar.", reasons: [" "], notes: [] },
+  ]) {
+    assert.equal(describeRecommendation({ ...RECOMMENDATION, explanation }, clock), null);
+  }
+});
+
+test("una recomendación urgente no deja marcadas a las siguientes", () => {
+  assert.equal(describeRecommendation({ ...RECOMMENDATION, urgent: true }, clock).pill.text, "Regar ya");
+  assert.equal(describeRecommendation(RECOMMENDATION, clock).pill.text, "Regar");
 });

@@ -1114,6 +1114,37 @@ code, .mono {
 .anomaly-empty { background: var(--sky-soft); color: var(--sky); }
 .anomaly-method { font-size: 0.75rem; color: var(--muted); }
 
+/* ── Recomendación de riego (AI-05) ──────────────────────────────────── */
+
+.pill-warn { background: var(--warn-soft); color: var(--warn); }
+.pill-crit { background: var(--crit-soft); color: var(--crit); }
+.rec-body { display: grid; gap: 12px; }
+.rec-main {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.rec-main .alert-icon { background: var(--leaf-soft); color: var(--leaf-strong); }
+.rec-main[data-tone="act"] .alert-icon { background: var(--warn-soft); color: var(--warn); }
+.rec-main[data-tone="soon"] .alert-icon { background: var(--sky-soft); color: var(--sky); }
+.rec-main[data-tone="unknown"] .alert-icon { background: var(--surface-3); color: var(--muted); }
+.rec-summary { font-weight: 700; color: var(--ink); margin: 0 0 6px; }
+.rec-reasons, .rec-notes, .rec-previous { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.rec-reasons { color: var(--ink-2); font-size: 0.875rem; }
+.rec-notes { margin-top: 8px; color: var(--muted); font-size: 0.8125rem; }
+.rec-notes li { display: flex; gap: 6px; align-items: flex-start; }
+.rec-details summary { cursor: pointer; font-size: 0.875rem; font-weight: 600; color: var(--leaf-strong); }
+.rec-inputs { margin: 8px 0 0; display: grid; gap: 6px; font-size: 0.8125rem; }
+.rec-input { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
+.rec-input dt { color: var(--muted); }
+.rec-input dd { margin: 0; color: var(--muted); }
+.rec-input strong { color: var(--ink); }
+.rec-previous { gap: 14px; margin-top: 10px; }
+.rec-previous-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; margin-bottom: 4px; }
+
 /* Avisos flotantes: una alerta nueva llega sin recargar la página. */
 .toasts {
   position: fixed;

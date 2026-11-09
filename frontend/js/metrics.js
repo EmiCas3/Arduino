@@ -162,6 +162,8 @@ export function formatValue(metric) {
  * Resumen de la última lectura tal como la reporta el Arduino:
  * [{ tone: "ok" | "warn" | "crit" | "plain", text }].
  * No son las alertas del sistema (eso es ALERT-01); es el dato del firmware.
+ * `riego_sugerido` no sale aquí: es una recomendación sin explicación, y esas
+ * no se muestran (criterio 4 de AI-05). La de riego va en su propia tarjeta.
  */
 export function summarize(last) {
   if (!last) return [];
@@ -170,7 +172,6 @@ export function summarize(last) {
   else if (last.estado === "AVISO") chips.push({ tone: "warn", text: "Arduino: aviso" });
   else if (last.estado === "ALERTA") chips.push({ tone: "crit", text: "Arduino: alerta" });
 
-  if (last.riego_sugerido === true) chips.push({ tone: "warn", text: "Riego sugerido" });
   if (last.bomba_habilitada === false) chips.push({ tone: "crit", text: "Bomba bloqueada: falta agua" });
   if (last.vent === "ALTA") chips.push({ tone: "plain", text: "Ventilación alta" });
   else if (last.vent === "BASE") chips.push({ tone: "plain", text: "Ventilación base" });
@@ -392,5 +393,68 @@ export function eventText(event) {
     origin: manual ? (event.user_name ? `Manual · ${event.user_name}` : "Manual") : "Automático",
     manual,
     reason: event.reason || "",
+  };
+}
+
+// ── Recomendación de riego (AI-04 y AI-05) ────────────────────────────
+
+const RECOMMENDATION_LOOK = {
+  irrigate: { tone: "act", pill: { class: "pill-warn", text: "Regar" } },
+  irrigate_soon: { tone: "soon", pill: { class: "pill-info", text: "Regar pronto" } },
+  no_irrigation: { tone: "calm", pill: { class: "pill-ok", text: "No hace falta" } },
+  too_wet: { tone: "soon", pill: { class: "pill-info", text: "No regar" } },
+  irrigating: { tone: "calm", pill: { class: "pill-ok", text: "Regando" } },
+  insufficient_data: { tone: "unknown", pill: { class: "pill-plain", text: "Sin dato" } },
+};
+
+/**
+ * Lo que la tarjeta dibuja de una recomendación, o `null` si no trae
+ * explicación: esa no se muestra (criterio 4 de AI-05).
+ *
+ *   summary, reasons, notes  el texto que redactó el backend
+ *   inputs                   las entradas exactas: [{ label, value, detail }]
+ *   tone, pill               cómo se ve
+ *
+ * Los valores van sin redondear: son los que usó la recomendación.
+ */
+export function describeRecommendation(recommendation, clock = (iso) => iso) {
+  const explanation = recommendation?.explanation;
+  const reasons = (explanation?.reasons ?? []).filter((reason) => reason?.trim());
+  if (!explanation?.summary?.trim() || !reasons.length) return null;
+
+  const look = RECOMMENDATION_LOOK[recommendation.outcome]
+    ?? { tone: "unknown", pill: { class: "pill-plain", text: "Recomendación" } };
+
+  const measured = (label, input) => ({
+    label,
+    value: input.value === null ? "Sin dato" : `${input.value} ${input.unit}`,
+    detail: input.value === null
+      ? ""
+      : `${input.samples} ${input.samples === 1 ? "lectura" : "lecturas"}, la última a las ${clock(input.ts)}`,
+  });
+  const irrigation = recommendation.inputs.last_irrigation;
+  const lastIrrigation = {
+    label: "Último riego",
+    value: irrigation.last_started_at === null
+      ? "Sin registro"
+      : `hace ${formatDuration(irrigation.hours_since * 3600)}`,
+    detail: irrigation.last_started_at === null
+      ? ""
+      : `${irrigation.irrigating ? "sigue regando desde" : "a"} las ${clock(irrigation.last_started_at)}`,
+  };
+
+  return {
+    tone: look.tone,
+    pill: recommendation.urgent ? { class: "pill-crit", text: "Regar ya" } : look.pill,
+    summary: explanation.summary,
+    reasons,
+    notes: explanation.notes ?? [],
+    inputs: [
+      measured("Humedad de la tierra", recommendation.inputs.soil),
+      measured("Temperatura", recommendation.inputs.temperature),
+      lastIrrigation,
+      measured("Nivel del tanque", recommendation.inputs.tank),
+      { label: "Humedad en la que conviene regar", value: `${recommendation.threshold} %`, detail: "" },
+    ],
   };
 }
