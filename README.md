@@ -18,4 +18,4 @@ v1.3.0 en `upaep-9f5` y de la v1.5.0 a la v1.6.0 en `upaep-9a0`).
 | `gateway/` | Cliente de la Raspberry Pi: Arduino → buffer → API (MON-03) | `gateway/README.md` |
 | `deploy/pi5/` | Instalación de todo en la Raspberry Pi 5 como servicios | `deploy/pi5/README.md` |
 | `frontend/` | HTML + CSS + JS que sirve el backend | `frontend/README.md` |
-| `vivero_sensores/` | Firmware del Arduino Uno | — |
+| `vivero_sensores/` | Firmware del Arduino Uno | `vivero_sensores/README.md` |
