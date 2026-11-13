@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import aiosqlite
 
+from app import audit
 from app.config import settings
 from app.firmware import ALERT_METRICS, FAULT_CODES, LIMIT_ALERTS, LimitAlert
 from app.models import Reading
@@ -100,6 +101,15 @@ async def _create(
         row,
     )
     row["id"] = cursor.lastrowid
+    await audit.record(
+        db, action="alert_raised", actor=audit.device_actor(device_id),
+        greenhouse_id=greenhouse_id, target_type="alert", target_id=row["id"],
+        summary=f"Alerta {hit.code}: {hit.metric} en {value:g} (límite {hit.threshold:g})",
+        detail={"metric": hit.metric, "code": hit.code, "direction": hit.direction,
+                "value": value, "threshold": hit.threshold,
+                "threshold_name": hit.constant, "area": area},
+        occurred_at=ts, now=datetime.fromisoformat(now_iso),
+    )
     return row
 
 
@@ -122,9 +132,20 @@ async def _save(db: aiosqlite.Connection, alert: dict) -> None:
     )
 
 
-def _close(alert: dict, value: float, ts: str, now_iso: str) -> None:
+async def _close(
+    db: aiosqlite.Connection, alert: dict, value: float, ts: str, now_iso: str
+) -> None:
     alert.update(status="cleared", cleared_at=now_iso, cleared_ts=ts,
                  cleared_value=value, evaluated_ts=ts)
+    await audit.record(
+        db, action="alert_cleared", actor=audit.device_actor(alert["device_id"]),
+        greenhouse_id=alert["greenhouse_id"], target_type="alert", target_id=alert["id"],
+        summary=f"Alerta {alert['code']} cerrada: {alert['metric']} en {value:g}",
+        detail={"metric": alert["metric"], "code": alert["code"], "value": value,
+                "threshold": alert["threshold"], "worst_value": alert["worst_value"],
+                "raised_at": alert["reading_ts"]},
+        occurred_at=ts, now=datetime.fromisoformat(now_iso),
+    )
 
 
 async def evaluate(
@@ -161,7 +182,7 @@ async def evaluate(
                 await _save(db, active)
             elif hit is not None:
                 if active is not None:   # cambió de lado (de muy seco a encharcado)
-                    _close(active, value, ts, now_iso)
+                    await _close(db, active, value, ts, now_iso)
                     await _save(db, active)
                 latest[metric] = await _create(
                     db, greenhouse_id, area, device_id, hit, value, ts, now_iso)
@@ -171,6 +192,6 @@ async def evaluate(
                 if active["clear_since"] is None:
                     active["clear_since"] = ts
                 if _seconds_between(active["clear_since"], ts) >= clear_after:
-                    _close(active, value, ts, now_iso)
+                    await _close(db, active, value, ts, now_iso)
                 await _save(db, active)
     return created

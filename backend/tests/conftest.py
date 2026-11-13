@@ -12,8 +12,13 @@ from datetime import datetime, timezone
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from app import security
 from app.database import close_db, init_db
 from app.security import hash_password
+
+# bcrypt con el costo real (12) tarda ~0.2 s por login y la suite hace cientos.
+# En las pruebas se usa el mínimo; el hash es igual de válido, solo más barato.
+security.BCRYPT_ROUNDS = 4
 
 GREENHOUSE_ID = "vivero-test-01"
 OTHER_GREENHOUSE_ID = "vivero-otro-02"
@@ -47,7 +52,7 @@ USERS = {
     },
 }
 
-# scrypt es lento a propósito: se calcula una sola vez por sesión de tests.
+# El hash es lento a propósito: se calcula una sola vez por sesión de tests.
 _HASHES = {role: hash_password(pw) for role, pw in PASSWORDS.items()}
 
 

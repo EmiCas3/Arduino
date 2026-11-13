@@ -1,0 +1,10 @@
+# NFR-03: bcrypt para el hash de contraseñas. Es opcional a propósito.
+#
+# Va aparte de requirements.txt porque en el Python de MSYS2 no hay paquete
+# compilado y construirlo pide Rust. Donde sí se puede instalar (Python de
+# python.org, macOS, Linux, la Raspberry Pi) instálalo:
+#
+#     pip install -r requirements-bcrypt.txt
+#
+# Sin él, el backend sigue funcionando con scrypt (ver app/security.py).
+bcrypt==4.2.1

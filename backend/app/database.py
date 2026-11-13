@@ -266,6 +266,45 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
         );
         CREATE INDEX IF NOT EXISTS ix_recommendations_greenhouse
             ON irrigation_recommendations(greenhouse_id, id);
+
+        -- AUTH-05: bitacora de auditoria. Una fila por evento de CUALQUIER
+        -- tipo (sesiones, alertas, equipos, recomendaciones) con quien, que y
+        -- cuando; ver app/audit.py. No lleva llaves foraneas a proposito: el
+        -- registro guarda el nombre del actor y el id del objetivo tal como
+        -- eran, y no depende de que esas filas sigan existiendo.
+        -- occurred_at / recorded_at: UTC con milisegundos, como readings.ts.
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type    TEXT NOT NULL
+                          CHECK(event_type IN ('auth','alert','actuator','recommendation')),
+            action        TEXT NOT NULL,
+            actor_type    TEXT NOT NULL
+                          CHECK(actor_type IN ('user','device','system','anonymous')),
+            actor_id      TEXT,
+            actor_name    TEXT,
+            greenhouse_id TEXT,
+            target_type   TEXT,
+            target_id     TEXT,
+            summary       TEXT NOT NULL,
+            detail        TEXT,
+            occurred_at   TEXT NOT NULL,
+            recorded_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_audit_occurred ON audit_log(occurred_at, id);
+        CREATE INDEX IF NOT EXISTS ix_audit_type ON audit_log(event_type, occurred_at);
+
+        -- AUTH-05, criterio 3: lo ya escrito no se modifica ni se borra. Lo
+        -- garantiza la BD, no solo el que la API no tenga PUT ni DELETE.
+        CREATE TRIGGER IF NOT EXISTS audit_log_no_update
+        BEFORE UPDATE ON audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_log es de solo agregar: no se modifica');
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_log_no_delete
+        BEFORE DELETE ON audit_log
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_log es de solo agregar: no se borra');
+        END;
     """)
     # NF-01: la BD de la Pi se creó antes del CO₂ (ver la nota de arriba).
     cursor = await _db.execute("PRAGMA table_info(readings)")

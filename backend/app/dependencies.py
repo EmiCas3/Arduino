@@ -31,6 +31,7 @@ import aiosqlite
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app import audit
 from app.config import settings
 from app.database import get_db
 from app.models import Role
@@ -73,10 +74,25 @@ def unauthorized(error: str, message: str) -> HTTPException:
     )
 
 
-async def _revoke_session(db: aiosqlite.Connection, session_id: str, now: datetime) -> None:
+_EXPIRY_SUMMARIES = {
+    "max_duration": "La sesión llegó a su duración máxima",
+    "idle": "La sesión se cerró por inactividad",
+    "user_inactive": "La sesión se cerró porque la cuenta está inactiva",
+}
+
+
+async def _revoke_session(
+    db: aiosqlite.Connection, session_id: str, now: datetime, user, reason: str
+) -> None:
+    """Cierra la sesión y lo deja en la bitácora (AUTH-05) con el motivo."""
     await db.execute(
         "UPDATE sessions SET revoked_at = ? WHERE session_id = ? AND revoked_at IS NULL",
         (now.isoformat(), session_id),
+    )
+    await audit.record(
+        db, action="session_expired", actor=audit.user_actor(user),
+        greenhouse_id=user["greenhouse_id"], target_type="session", target_id=session_id,
+        summary=_EXPIRY_SUMMARIES[reason], detail={"reason": reason}, now=now,
     )
     await db.commit()
 
@@ -115,19 +131,19 @@ async def get_current_user(
         raise unauthorized("session_expired", "Tu sesión terminó. Inicia sesión de nuevo.")
 
     if now >= parse_utc(row["expires_at"]):
-        await _revoke_session(db, session_id, now)
+        await _revoke_session(db, session_id, now, row, "max_duration")
         raise unauthorized("session_expired", "Tu sesión venció. Inicia sesión de nuevo.")
 
     idle_limit = timedelta(minutes=settings.session_idle_minutes)
     if now - parse_utc(row["last_seen_at"]) > idle_limit:
-        await _revoke_session(db, session_id, now)
+        await _revoke_session(db, session_id, now, row, "idle")
         raise unauthorized(
             "session_expired",
             "Tu sesión se cerró por inactividad. Inicia sesión de nuevo.",
         )
 
     if row["status"] != "active":
-        await _revoke_session(db, session_id, now)
+        await _revoke_session(db, session_id, now, row, "user_inactive")
         raise unauthorized("session_expired", "Tu sesión terminó. Inicia sesión de nuevo.")
 
     # Un refresco automático no es actividad del usuario: no renueva la sesión.

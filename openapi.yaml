@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.9.0
+  version: 1.10.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -136,8 +136,8 @@ info:
     | Rol | Puede |
     |---|---|
     | `producer` | Ver su vivero asignado y sus actuadores activos; cambiar el modo de riego y regar a mano en su vivero (v1.4.0) |
-    | `admin` | Todo lo anterior en cualquier vivero + registrar y editar actuadores |
-    | `super_admin` | Todo lo de `admin` (+ roles y bitacora en sprints futuros) |
+    | `admin` | Todo lo anterior en cualquier vivero + registrar y editar actuadores + consultar la bitacora de auditoria (v1.10.0) |
+    | `super_admin` | Todo lo de `admin` (+ roles en sprints futuros) |
 
     Rol insuficiente → **403** y la accion no se ejecuta. Sin token o con token
     vencido → **401**. El rol se lee de la BD en cada request.
@@ -148,6 +148,19 @@ info:
     (schema `ErrorDetail`). Los endpoints de v1.0.0 documentan `Error` sin el
     envoltorio `detail`; se deja asi para no romper al cliente de la Pi hasta
     que el equipo decida unificarlo.
+
+    **v1.10.0 (Sprint 4, AUTH-05 y NFR-03):** bitacora de auditoria.
+    `GET /audit/events` devuelve los inicios de sesion, las alertas, las
+    acciones sobre los equipos y las recomendaciones de la IA, cada uno con
+    quien lo hizo (`actor_*`), que paso (`event_type`, `action`, `summary`,
+    `detail`) y cuando (`occurred_at`). Se filtra por rango de fechas y por
+    tipo de evento, y tambien por accion, actor y vivero; va paginada. Solo
+    Administrador y Super Administrador. La bitacora es de solo agregar: no
+    hay ninguna ruta para modificar o borrar eventos y la base de datos lo
+    impide con triggers. Contrasenas (NFR-03): se guardan con bcrypt (o
+    scrypt donde bcrypt no se puede instalar), siempre con salt; las cuentas
+    anteriores se migran solas en su siguiente inicio de sesion. No cambia
+    ninguna ruta ni respuesta existente.
 
   contact:
     name: RadishSoftware - UPAEP, Agile Project Management
@@ -185,6 +198,8 @@ tags:
     description: Riego automatico y manual (ACT-02)
   - name: analysis
     description: Analisis de la informacion historica (AI-01), condiciones inusuales (AI-02) y recomendacion de riego (AI-04)
+  - name: audit
+    description: Bitacora de auditoria (AUTH-05)
 
 security:
   - ApiKeyAuth: []
@@ -750,6 +765,102 @@ paths:
           $ref: '#/components/responses/SessionRequired'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  # ── Sprint 4: bitacora de auditoria (AUTH-05) ─────────────────────────
+
+  /audit/events:
+    get:
+      tags: [audit]
+      summary: Bitacora de auditoria por fecha y tipo de evento
+      description: |
+        Inicios de sesion, alertas, acciones sobre los equipos y
+        recomendaciones de la IA, cada uno con quien lo hizo, que paso y
+        cuando. Del evento mas nuevo al mas viejo. Por defecto, las ultimas
+        24 h. Solo Administrador y Super Administrador.
+
+        La bitacora es de solo lectura: no existe ninguna ruta para modificar
+        o borrar eventos.
+
+        Acciones por tipo de evento:
+        - `auth`: `login`, `login_failed`, `logout`, `session_expired`
+        - `alert`: `alert_raised`, `alert_cleared`
+        - `actuator`: `actuator_on`, `actuator_off`, `command_requested`,
+          `mode_changed`, `actuator_registered`, `actuator_updated`,
+          `actuator_deactivated`, `actuator_reactivated`
+        - `recommendation`: `recommendation_generated`,
+          `recommendation_accepted`, `recommendation_rejected`
+      operationId: listAuditEvents
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          description: Inicio del rango (ISO 8601 con zona). Por defecto, 24 h antes de `to`
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Fin del rango (ISO 8601 con zona). Por defecto, ahora
+          schema:
+            type: string
+            format: date-time
+        - name: event_type
+          in: query
+          description: Tipo de evento. Se puede repetir para pedir varios
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/AuditEventType'
+        - name: action
+          in: query
+          description: Accion exacta. Se puede repetir. Una accion desconocida responde 422 `unknown_action`
+          schema:
+            type: array
+            items:
+              type: string
+        - name: actor_type
+          in: query
+          schema:
+            $ref: '#/components/schemas/AuditActorType'
+        - name: actor_id
+          in: query
+          description: Id del usuario o del dispositivo
+          schema:
+            type: string
+            maxLength: 64
+        - name: greenhouse_id
+          in: query
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Una pagina de la bitacora
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventList'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/InvalidRange'
 
   # ── Sprint 2: sesiones de usuario (AUTH-01 / AUTH-02) ─────────────────
 
@@ -2926,6 +3037,93 @@ components:
               loc: [query, metric]
               msg: "value is not a valid enumeration member; permitted: 'temp_c', 'hum_aire_pct', 'suelo_pct', 'nivel_pct', 'luz_nivel', 'co2_ppm'"
               type: type_error.enum
+
+    AuditEventType:
+      type: string
+      enum: [auth, alert, actuator, recommendation]
+      description: Familia del evento
+
+    AuditActorType:
+      type: string
+      enum: [user, device, system, anonymous]
+      description: |
+        `user` una persona; `device` el Arduino (por su gateway); `system` el
+        backend por su cuenta; `anonymous` un intento de inicio de sesion que
+        no corresponde a ninguna cuenta.
+
+    AuditEvent:
+      type: object
+      required:
+        [id, event_type, action, actor_type, summary, occurred_at, recorded_at]
+      properties:
+        id:
+          type: integer
+        event_type:
+          $ref: '#/components/schemas/AuditEventType'
+        action:
+          type: string
+          example: alert_raised
+        actor_type:
+          $ref: '#/components/schemas/AuditActorType'
+        actor_id:
+          type: string
+          nullable: true
+          description: Id del usuario o del dispositivo
+        actor_name:
+          type: string
+          nullable: true
+          description: Nombre del actor en ese momento
+        greenhouse_id:
+          type: string
+          nullable: true
+          description: null = evento de la plataforma
+        target_type:
+          type: string
+          nullable: true
+          example: alert
+        target_id:
+          type: string
+          nullable: true
+        summary:
+          type: string
+          description: Que paso, en lenguaje claro
+        detail:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Datos del evento (valor, umbral, motivo...)
+        occurred_at:
+          type: string
+          format: date-time
+          description: |
+            Cuando paso (UTC). En lo que reporta el Arduino es la hora de la
+            lectura, no la de llegada al servidor.
+        recorded_at:
+          type: string
+          format: date-time
+          description: Cuando se escribio en la bitacora (UTC)
+
+    AuditEventList:
+      type: object
+      required: [from, to, total, limit, offset, items]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        total:
+          type: integer
+          description: Eventos que cumplen los filtros, sin paginar
+        limit:
+          type: integer
+        offset:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
 
   responses:
     BadRequest:

@@ -22,7 +22,7 @@ from datetime import timedelta
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from app import irrigation
+from app import audit, irrigation
 from app.actuator_state import DETAILS, power_state
 from app.config import settings
 from app.database import get_db
@@ -219,7 +219,7 @@ async def change_mode(
     await irrigation.queue_command(
         db, greenhouse_id=greenhouse_id, device_id=controller["device_id"], kind="mode",
         value=body.mode.value.upper(), trigger="manual", user_id=user["id"], now=now,
-        reason=f"Cambio a riego {label}",
+        reason=f"Cambio a riego {label}", actor=audit.user_actor(user),
     )
     await db.commit()
     return await _irrigation_status(db, greenhouse_id)

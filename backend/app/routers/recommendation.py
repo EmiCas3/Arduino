@@ -38,7 +38,7 @@ from typing import List, Optional
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from app import history
+from app import audit, history
 from app import metrics as metric_catalog
 from app import recommendation
 from app.config import settings
@@ -200,13 +200,23 @@ async def _store_if_changed(
     key = (current.outcome.value, int(current.urgent), int(current.tank_blocks))
     if last is not None and tuple(last) == key:
         return
-    await db.execute(
+    cursor = await db.execute(
         """
         INSERT INTO irrigation_recommendations
             (greenhouse_id, outcome, urgent, tank_blocks, payload, generated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (current.greenhouse_id, *key, current.json(), history.ts_text(current.generated_at)),
+    )
+    # Bitácora (AUTH-05): la recomendación la produce la plataforma.
+    await audit.record(
+        db, action="recommendation_generated", actor=audit.SYSTEM_ACTOR,
+        greenhouse_id=current.greenhouse_id, target_type="recommendation",
+        target_id=cursor.lastrowid, summary=current.explanation.summary,
+        detail={"outcome": current.outcome.value, "urgent": current.urgent,
+                "tank_blocks": current.tank_blocks, "threshold": current.threshold,
+                "missing": current.missing},
+        occurred_at=current.generated_at, now=current.generated_at,
     )
     await db.commit()
 

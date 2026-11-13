@@ -22,6 +22,8 @@ Variables:
                                        cerrar una alerta (60)
     SMARTGREENAI_COMMAND_ACK_SECONDS   Segundos que se espera que el Arduino confirme
                                        una orden antes de darla por perdida (45)
+    SMARTGREENAI_BCRYPT_ROUNDS         Costo de bcrypt para las contraseñas, de 4 a 16 (12).
+                                       Solo aplica si la librería bcrypt está instalada
 """
 
 import logging
@@ -95,6 +97,12 @@ class Settings:
         # ACT-02: segundos que se espera la confirmación del Arduino (cmd_id)
         # después de entregar una orden al gateway. Pasado eso, "expired".
         self.command_ack_seconds: int = _int_env("SMARTGREENAI_COMMAND_ACK_SECONDS", 45)
+
+        # NFR-03: costo de bcrypt (2^n rondas). Fuera de 4–16 no arranca:
+        # menos es débil y más vuelve cada login de varios segundos.
+        self.bcrypt_rounds: int = _int_env("SMARTGREENAI_BCRYPT_ROUNDS", 12)
+        if not 4 <= self.bcrypt_rounds <= 16:
+            raise RuntimeError("SMARTGREENAI_BCRYPT_ROUNDS debe estar entre 4 y 16")
 
         # El prototipo es un solo ambiente: todos los sensores están en la misma
         # área. Es el mismo valor que usan los actuadores del seed.

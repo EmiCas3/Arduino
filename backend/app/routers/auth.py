@@ -17,11 +17,18 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Response
 from starlette.concurrency import run_in_threadpool
 
+from app import audit
 from app.config import settings
 from app.database import get_db
 from app.dependencies import ALL_ROLES, require_roles, utcnow
 from app.models import ErrorResponse, LoginRequest, LoginResponse, UserPublic
-from app.security import DUMMY_HASH, create_access_token, verify_password
+from app.security import (
+    DUMMY_HASH,
+    create_access_token,
+    hash_password,
+    needs_rehash,
+    verify_password,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -71,10 +78,33 @@ async def login(
     stored_hash = user["password_hash"] if user is not None else DUMMY_HASH
     password_ok = await run_in_threadpool(verify_password, body.password, stored_hash)
 
+    now = utcnow()
     if user is None or not password_ok or user["status"] != "active":
+        # Bitácora (AUTH-05). El motivo queda aquí, nunca en la respuesta. Si la
+        # cuenta no existe NO se guarda lo que se tecleó: podría ser una
+        # contraseña escrita en el campo equivocado (NFR-03).
+        if user is None:
+            actor, reason = audit.ANONYMOUS_ACTOR, "unknown_user"
+        else:
+            actor = audit.user_actor(user)
+            reason = "wrong_password" if not password_ok else "inactive_user"
+        await audit.record(
+            db, action="login_failed", actor=actor,
+            greenhouse_id=user["greenhouse_id"] if user is not None else None,
+            summary="Intento de inicio de sesión rechazado",
+            detail={"reason": reason}, now=now,
+        )
+        await db.commit()
         raise HTTPException(status_code=401, detail=INVALID_CREDENTIALS)
 
-    now = utcnow()
+    # NFR-03: si el hash guardado no está en el esquema preferido (una cuenta
+    # de antes de bcrypt), se vuelve a guardar ahora que se conoce la contraseña.
+    rehashed = needs_rehash(stored_hash)
+    if rehashed:
+        new_hash = await run_in_threadpool(hash_password, body.password)
+        await db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
+
     session_id = uuid.uuid4().hex
     expires_at = now + timedelta(hours=settings.session_max_hours)
 
@@ -88,6 +118,12 @@ async def login(
     await db.execute(
         "UPDATE users SET last_login_at = ? WHERE id = ?",
         (now.isoformat(), user["id"]),
+    )
+    await audit.record(
+        db, action="login", actor=audit.user_actor(user),
+        greenhouse_id=user["greenhouse_id"], target_type="session", target_id=session_id,
+        summary="Inicio de sesión", now=now,
+        detail={"role": user["role"], "password_rehashed": rehashed},
     )
     await db.commit()
 
@@ -112,9 +148,15 @@ async def logout(
     user: dict = Depends(require_roles(*ALL_ROLES)),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> Response:
+    now = utcnow()
     await db.execute(
         "UPDATE sessions SET revoked_at = ? WHERE session_id = ? AND revoked_at IS NULL",
-        (utcnow().isoformat(), user["session_id"]),
+        (now.isoformat(), user["session_id"]),
+    )
+    await audit.record(
+        db, action="logout", actor=audit.user_actor(user),
+        greenhouse_id=user["greenhouse_id"], target_type="session",
+        target_id=user["session_id"], summary="Cierre de sesión", now=now,
     )
     await db.commit()
     return Response(status_code=204)

@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import aiosqlite
 
+from app import audit
 from app.actuator_state import Transition
 from app.config import settings
 from app.firmware import CONSTANTS
@@ -189,9 +190,14 @@ async def queue_command(
     now: datetime,
     user_id: Optional[int] = None,
     actuator_id: Optional[str] = None,
+    actor: Optional[dict] = None,
 ) -> int:
     """Guarda una orden `pending`. Una orden del mismo tipo que aún no salió
-    queda reemplazada (`superseded`): solo cuenta la última. No hace commit."""
+    queda reemplazada (`superseded`): solo cuenta la última. No hace commit.
+
+    Queda en la bitácora (AUTH-05) a nombre de `actor`: la persona que la
+    pidió (audit.user_actor) o, si no se pasa, la plataforma.
+    """
     await db.execute(
         """
         UPDATE actuator_commands SET status = 'superseded'
@@ -208,7 +214,18 @@ async def queue_command(
         """,
         (greenhouse_id, device_id, actuator_id, kind, value, trigger, reason, user_id, _iso(now)),
     )
-    return cursor.lastrowid
+    command_id = cursor.lastrowid
+    await audit.record(
+        db, action="mode_changed" if kind == "mode" else "command_requested",
+        actor=actor or audit.SYSTEM_ACTOR, greenhouse_id=greenhouse_id,
+        target_type="irrigation_mode" if kind == "mode" else "actuator",
+        target_id=greenhouse_id if kind == "mode" else actuator_id,
+        summary=reason,
+        detail={"command_id": command_id, "kind": kind, "value": value,
+                "trigger": trigger, "device_id": device_id},
+        now=now,
+    )
+    return command_id
 
 
 async def deliver(db: aiosqlite.Connection, device_id: str, now: datetime) -> List[dict]:
@@ -333,6 +350,26 @@ async def _record_events(
                 command["id"] if command else None,
                 transition.reading_ts, now_iso,
             ),
+        )
+        # Bitácora (AUTH-05): a nombre de la persona si fue una orden manual
+        # con usuario conocido; si no, del Arduino, que es quien lo decidió.
+        actor = audit.device_actor(device_id)
+        if command is not None and command["user_id"] is not None:
+            user_cursor = await db.execute(
+                "SELECT id, username, full_name FROM users WHERE id = ?", (command["user_id"],))
+            user_row = await user_cursor.fetchone()
+            if user_row is not None:
+                actor = audit.user_actor(user_row)
+        name = transition.actuator["name"]
+        await audit.record(
+            db, action="actuator_on" if transition.is_on else "actuator_off", actor=actor,
+            greenhouse_id=greenhouse_id, target_type="actuator",
+            target_id=transition.actuator["actuator_id"],
+            summary=f"{name} {'encendió' if transition.is_on else 'apagó'}: {reason}",
+            detail={"origin": origin, "reason": reason, "device_id": device_id,
+                    "actuator_type": transition.actuator["type"],
+                    "command_id": command["id"] if command else None},
+            occurred_at=transition.reading_ts, now=datetime.fromisoformat(now_iso),
         )
 
 

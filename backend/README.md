@@ -20,9 +20,14 @@ También sirve el frontend (`../frontend`) desde el mismo origen.
 ## Requisitos
 
 - Python 3.10 o superior (el equipo usa 3.12).
-- Nada más: todas las dependencias son puro Python o traen wheel. **No hace
-  falta Rust ni compilador** (por eso se usa Pydantic v1, `hashlib.scrypt` de
-  la librería estándar para las contraseñas y PyJWT para los tokens).
+- Nada más: todas las dependencias de `requirements.txt` son puro Python o
+  traen wheel. **No hace falta Rust ni compilador** (por eso se usa Pydantic
+  v1 y PyJWT para los tokens).
+- **Opcional pero recomendado: `bcrypt`** para las contraseñas (NFR-03):
+  `pip install -r requirements-bcrypt.txt`. Va aparte porque en el Python de
+  MSYS2 no hay paquete compilado; con Python de python.org, macOS, Linux o la
+  Raspberry Pi se instala sin problema. Sin él, el backend usa
+  `hashlib.scrypt` y todo sigue funcionando.
 
 ## Setup rápido
 
@@ -75,6 +80,7 @@ a paso desde cero está en [`../deploy/pi5/README.md`](../deploy/pi5/README.md).
 | `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` | `300` | Segundos que un `ts` puede ir adelante del reloj del servidor antes de rechazarse |
 | `SMARTGREENAI_ALERT_CLEAR_SECONDS` | `60` | Segundos seguidos sin el código de límite para cerrar una alerta (ALERT-01) |
 | `SMARTGREENAI_COMMAND_ACK_SECONDS` | `45` | Segundos que se espera que el Arduino confirme una orden antes de marcarla `expired` (ACT-02) |
+| `SMARTGREENAI_BCRYPT_ROUNDS` | `12` | Costo de bcrypt para las contraseñas, de 4 a 16 (NFR-03). Solo aplica con `bcrypt` instalado |
 
 Puedes ponerlas en un archivo `.env` (está en `.gitignore`) o en la terminal:
 
@@ -113,9 +119,10 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/anomalies` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/irrigation/recommendation` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/irrigation/recommendations` | Bearer | todos (productor: solo su vivero) |
+| GET | `/audit/events` | Bearer | admin, super_admin |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.9.0).
+El contrato completo está en `../openapi.yaml` (v1.10.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -363,6 +370,63 @@ consulta: sin nadie viendo el dashboard no se generan recomendaciones.
 **Sin explicación no se muestra.** Si `is_explained()` no aprueba el texto, el
 endpoint responde 503 y no guarda nada.
 
+### Bitácora de auditoría (AUTH-05)
+
+Una sola tabla, `audit_log`, para todo lo que pasa en la plataforma. Cada
+evento dice **quién** (`actor_type`, `actor_id`, `actor_name`), **qué**
+(`event_type`, `action`, `summary`, `detail`) y **cuándo** (`occurred_at`).
+
+| `event_type` | `action` | Actor |
+|---|---|---|
+| `auth` | `login`, `logout` | la persona |
+| `auth` | `login_failed` | la persona si la cuenta existe; `anonymous` si no |
+| `auth` | `session_expired` (inactividad, duración máxima o cuenta inactiva) | la persona |
+| `alert` | `alert_raised`, `alert_cleared` | el Arduino (`device`) |
+| `actuator` | `actuator_on`, `actuator_off` | el Arduino, o la persona si fue una orden manual |
+| `actuator` | `command_requested`, `mode_changed` | la persona, o `system` si el backend re-sincroniza el modo |
+| `actuator` | `actuator_registered`, `actuator_updated`, `actuator_deactivated`, `actuator_reactivated` | el administrador |
+| `recommendation` | `recommendation_generated` | `system` (la IA) |
+| `recommendation` | `recommendation_accepted`, `recommendation_rejected` | reservadas para AI-07 |
+
+```bash
+# Alertas y equipos del 10 al 12 de noviembre, 20 por página
+curl "http://localhost:8000/api/v1/audit/events?event_type=alert&event_type=actuator&from=2026-11-10T00:00:00-06:00&to=2026-11-12T00:00:00-06:00&limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+# → {"from": "...", "to": "...", "total": 37, "limit": 20, "offset": 0,
+#    "items": [{"id": 412, "event_type": "alert", "action": "alert_raised",
+#               "actor_type": "device", "actor_id": "pi-vivero-01",
+#               "summary": "Alerta TEMP_ALTA: temp_c en 31.2 (límite 30)",
+#               "detail": {"value": 31.2, "threshold": 30.0, ...},
+#               "occurred_at": "2026-11-11T18:03:22+00:00", ...}]}
+```
+
+- **Filtros:** `from` y `to` (con zona horaria; por defecto las últimas 24 h),
+  `event_type` y `action` (se pueden repetir), `actor_type`, `actor_id`,
+  `greenhouse_id`, `limit` (máx. 200) y `offset`. Del más nuevo al más viejo.
+- **`occurred_at` es cuándo pasó.** En lo que reporta el Arduino es la hora
+  de la *lectura*: si la Pi estuvo sin red y manda el lote después, la
+  bitácora queda con las horas reales. `recorded_at` es cuándo se escribió.
+- **Solo se agrega.** La API solo tiene `GET`, y la tabla tiene dos triggers
+  que abortan cualquier `UPDATE` o `DELETE`, también hechos a mano con
+  `sqlite3`. Para vaciarla en desarrollo hay que borrar el archivo de la BD.
+- **Misma transacción.** `audit.record()` no hace commit: el evento se guarda
+  junto con la acción que registra. Una acción rechazada (403, 409) no deja
+  evento; un login fallido sí, porque el intento es el evento.
+- **Nunca guarda contraseñas** ni lo que se tecleó en el login: un intento
+  contra una cuenta que no existe queda como `anonymous`, sin el texto.
+
+Para registrar algo nuevo (por ejemplo AI-07), agrega la acción a `ACTIONS`
+en `app/audit.py` y llama a `record()` antes del `commit` de tu endpoint:
+
+```python
+await audit.record(
+    db, action="recommendation_accepted", actor=audit.user_actor(user),
+    greenhouse_id=greenhouse_id, target_type="recommendation", target_id=rec_id,
+    summary="Aceptó la recomendación de regar",
+)
+await db.commit()
+```
+
 ### Ejemplos
 
 ```bash
@@ -427,9 +491,20 @@ El protocolo completo con el Arduino está en `../gateway/PROTOCOLO_ARDUINO.md`.
 
 ## Cómo funciona la seguridad
 
-- **Contraseñas:** `hashlib.scrypt` con salt (`scrypt$n=16384,r=8,p=1$...`).
-  Nunca se guardan ni se devuelven en texto plano. `needs_rehash()` deja
-  lista la migración a bcrypt/argon2 de NFR-03 (Sprint 4).
+- **Contraseñas (NFR-03):** solo se guarda un hash con salt, nunca la
+  contraseña. Con `bcrypt` instalado se usa bcrypt
+  (`bcrypt-sha256$2b$12$...`; la contraseña pasa antes por SHA-256 para que
+  cuente completa y no solo sus primeros 72 bytes). Sin él se usa
+  `hashlib.scrypt` (`scrypt$n=16384,r=8,p=1$...`), que también lleva salt.
+  Cada hash dice su esquema, así que los dos conviven.
+- **Migración de cuentas:** no hay que recrear a nadie. En el login, si el
+  hash guardado no está en el esquema preferido de esa instalación
+  (`needs_rehash()`), la contraseña se vuelve a guardar con el nuevo. Para
+  ver cuántas faltan: `python -m app.passwords` (sale con código 1 si alguna
+  cuenta tiene algo que no es un hash válido). Una BD con hashes bcrypt no
+  se puede usar en una instalación sin la librería: esos usuarios no entran
+  y el log lo dice.
+- **Bitácora (AUTH-05):** ver la sección de arriba. Es de solo agregar.
 - **Sesión:** el login crea una fila en `sessions` y firma un JWT
   `{sub, sid, exp}`. En cada request `get_current_user` revisa la firma, que
   la sesión no esté revocada ni vencida y que no lleve más de 30 min sin
@@ -456,8 +531,8 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-498 tests: ingesta (9), horas y validación parcial de la ingesta (24),
-login (22), roles (50, incluye el barrido de todas las rutas), actuadores
+546 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+login (22), roles (54, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (41), espejo de las constantes del firmware (5),
 riego (31), frontend (20), histórico y gráficas (44), análisis (38), sensor
@@ -466,7 +541,12 @@ Pi que gana la columna), anomalías (41, `test_anomalies.py`: la regla pura,
 el riego que las explica y el endpoint), recomendación de riego (30,
 `test_recommendation.py`: cada variable cambia el resultado, las orillas y
 el endpoint), explicación de la recomendación (36, `test_explanation.py`: el
-texto, lo guardado y que sin explicación no se muestra) y contrato (2, `test_contract.py`: la versión de la app es la
+texto, lo guardado y que sin explicación no se muestra), bitácora (27,
+`test_audit.py`: cada tipo de evento queda con actor, acción y hora, la
+consulta por fecha y tipo, y que la BD rechaza `UPDATE` y `DELETE`),
+contraseñas (19, `test_passwords.py`: bcrypt y scrypt, la migración en el
+login y que ninguna contraseña queda en la BD, el log ni las respuestas; las
+de bcrypt se saltan si no está instalado) y contrato (2, `test_contract.py`: la versión de la app es la
 de `openapi.yaml` y todo endpoint de `/api/v1` está documentado ahí).
 
 La lógica del frontend se prueba aparte, sin navegador ni `npm install`:
@@ -485,7 +565,9 @@ backend/
 │   ├── database.py      # SQLite async y creación de tablas
 │   ├── models.py        # Schemas Pydantic v1
 │   ├── auth.py          # Autenticación de DISPOSITIVOS (X-API-Key)
-│   ├── security.py      # Hash de contraseñas (scrypt) y JWT
+│   ├── security.py      # Hash de contraseñas (bcrypt o scrypt, NFR-03) y JWT
+│   ├── passwords.py     # python -m app.passwords: revisión de la migración (NFR-03)
+│   ├── audit.py         # Bitácora: catálogo de eventos, record() y query() (AUTH-05)
 │   ├── dependencies.py  # get_current_user, require_roles (USUARIOS)
 │   ├── seed.py          # Datos de demo
 │   ├── actuator_state.py # Estado reportado de cada actuador (ACT-04)
@@ -505,10 +587,12 @@ backend/
 │       ├── readings.py  # viveros, últimas lecturas (DASH-01) e histórico (DASH-02)
 │       ├── analysis.py  # tendencias (AI-01) y anomalías (AI-02) del vivero
 │       ├── recommendation.py # recomendación de riego (AI-04) y las guardadas (AI-05)
+│       ├── audit.py     # consulta de la bitácora (AUTH-05)
 │       ├── control.py   # estado de los equipos (ACT-04) y riego (ACT-02)
 │       └── alerts.py    # alertas del vivero (ALERT-01)
 ├── tests/
 ├── requirements.txt
+├── requirements-bcrypt.txt  # opcional: bcrypt para las contraseñas (NFR-03)
 └── README.md
 ```
 
@@ -527,6 +611,8 @@ backend/
 | `irrigation_mode` | ACT-02 | Modo elegido por vivero, con quién y cuándo (sin fila = `auto`) |
 | `actuator_commands` | ACT-02 | Órdenes al Arduino y su estado (pending → sent → confirmed / rejected / expired) |
 | `actuator_events` | ACT-02 | Cada encendido/apagado con origen (`auto`/`manual`), motivo y usuario |
+| `irrigation_recommendations` | AI-05 | Cada recomendación distinta, con sus entradas y su explicación |
+| `audit_log` | AUTH-05 | Bitácora: una fila por evento con actor, acción y hora. Sin llaves foráneas (guarda los nombres como eran) y con triggers que impiden `UPDATE` y `DELETE` |
 
 No hay migraciones: las tablas se crean con `CREATE TABLE IF NOT EXISTS`. Si
 algún día cambia una tabla **existente**, habrá que borrar la BD local o

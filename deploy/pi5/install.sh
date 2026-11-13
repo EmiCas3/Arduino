@@ -50,6 +50,9 @@ paso "3/7 Backend: entorno virtual y dependencias"
 [ -x "$REPO/backend/.venv/bin/python" ] || python3 -m venv "$REPO/backend/.venv"
 "$REPO/backend/.venv/bin/python" -m pip install -q --upgrade pip
 "$REPO/backend/.venv/bin/python" -m pip install -q -r "$REPO/backend/requirements.txt"
+# NFR-03: bcrypt para las contraseñas. Si no se pudo instalar, el backend usa scrypt.
+"$REPO/backend/.venv/bin/python" -m pip install -q -r "$REPO/backend/requirements-bcrypt.txt" \
+    || aviso "No se pudo instalar bcrypt: las contraseñas se guardarán con scrypt."
 
 paso "4/7 Gateway: entorno virtual y dependencias (solo pyserial)"
 [ -x "$REPO/gateway/.venv/bin/python" ] || python3 -m venv "$REPO/gateway/.venv"

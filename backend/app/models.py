@@ -943,3 +943,53 @@ class RecommendationHistory(BaseModel):
 
     greenhouse_id: str
     items: List[IrrigationRecommendation]
+
+
+# ── Bitácora de auditoría (AUTH-05) ────────────────────────────────────
+
+class AuditEventType(str, Enum):
+    """Familia del evento. Las acciones de cada una están en app/audit.py."""
+
+    auth = "auth"
+    alert = "alert"
+    actuator = "actuator"
+    recommendation = "recommendation"
+
+
+class AuditActorType(str, Enum):
+    user = "user"            # una persona
+    device = "device"        # el Arduino, por su gateway
+    system = "system"        # el backend por su cuenta
+    anonymous = "anonymous"  # intento de login que no es de ninguna cuenta
+
+
+class AuditEvent(BaseModel):
+    """Un evento de la bitácora: quién, qué y cuándo."""
+
+    id: int
+    event_type: AuditEventType
+    action: str = Field(..., example="alert_raised")
+    actor_type: AuditActorType
+    actor_id: Optional[str] = Field(None, description="Id del usuario o del dispositivo")
+    actor_name: Optional[str] = Field(None, description="Nombre del actor en ese momento")
+    greenhouse_id: Optional[str] = Field(None, description="null = evento de la plataforma")
+    target_type: Optional[str] = Field(None, example="alert")
+    target_id: Optional[str] = None
+    summary: str = Field(..., description="Qué pasó, en lenguaje claro")
+    detail: Optional[dict] = Field(None, description="Datos del evento (valor, umbral, motivo…)")
+    occurred_at: datetime = Field(..., description="Cuándo pasó (UTC)")
+    recorded_at: datetime = Field(..., description="Cuándo se escribió en la bitácora (UTC)")
+
+
+class AuditEventList(BaseModel):
+    """Una página de la bitácora, del evento más nuevo al más viejo."""
+
+    period_from: datetime = Field(..., alias="from")
+    period_to: datetime = Field(..., alias="to")
+    total: int = Field(..., description="Eventos que cumplen los filtros, sin paginar")
+    limit: int
+    offset: int
+    items: List[AuditEvent]
+
+    class Config:
+        allow_population_by_field_name = True

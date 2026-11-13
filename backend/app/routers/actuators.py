@@ -23,7 +23,7 @@ from typing import List, Optional
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from app import irrigation
+from app import audit, irrigation
 from app.database import get_db
 from app.dependencies import (
     ADMIN_ROLES,
@@ -189,6 +189,15 @@ async def register_actuator(
                 user["id"],
             ),
         )
+        await audit.record(
+            db, action="actuator_registered", actor=audit.user_actor(user),
+            greenhouse_id=body.greenhouse_id, target_type="actuator",
+            target_id=body.actuator_id,
+            summary=f"Se registró {body.name} ({body.type.value}) en el canal {body.control_channel}",
+            detail={"type": body.type.value, "area": body.area,
+                    "control_channel": body.control_channel,
+                    "gateway_device_id": body.gateway_device_id},
+        )
         await db.commit()
     except sqlite3.IntegrityError:
         # Carrera: otra request guardó el mismo id o canal entre la validación
@@ -322,6 +331,22 @@ async def update_actuator(
             f"UPDATE actuators SET {assignments} WHERE actuator_id = ?",
             (*changes.values(), actuator_id),
         )
+        if new_status == current["status"]:
+            action, verb = "actuator_updated", "Se editó"
+        elif new_status == "inactive":
+            action, verb = "actuator_deactivated", "Se desactivó"
+        else:
+            action, verb = "actuator_reactivated", "Se reactivó"
+        await audit.record(
+            db, action=action, actor=audit.user_actor(user),
+            greenhouse_id=current["greenhouse_id"], target_type="actuator",
+            target_id=actuator_id, summary=f"{verb} {current['name']}",
+            detail={"changes": {
+                field: {"from": current[field], "to": value}
+                for field, value in changes.items()
+                if field not in ("updated_at", "deactivated_at") and current[field] != value
+            }},
+        )
         await db.commit()
     except sqlite3.IntegrityError:
         await db.rollback()
@@ -381,7 +406,7 @@ async def command_actuator(
     command_id = await irrigation.queue_command(
         db, greenhouse_id=actuator["greenhouse_id"], device_id=actuator["gateway_device_id"],
         kind="pump", value=body.action.value.upper(), trigger="manual", user_id=user["id"],
-        actuator_id=actuator_id, now=now,
+        actuator_id=actuator_id, now=now, actor=audit.user_actor(user),
         reason="Orden manual: regar" if body.action == CommandAction.on else "Orden manual: detener",
     )
     await db.commit()

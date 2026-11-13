@@ -20,6 +20,7 @@ from app.security import (
     create_access_token,
     hash_password,
     needs_rehash,
+    preferred_scheme,
     verify_password,
 )
 from tests.conftest import PASSWORDS, USERS, bearer, login
@@ -85,6 +86,7 @@ async def test_login_response_never_includes_hash(api):
     body = resp.text
     assert "password" not in body
     assert "scrypt$" not in body
+    assert "bcrypt" not in body
     assert PASSWORDS["producer"] not in body
 
 
@@ -259,7 +261,7 @@ async def test_forged_signature_401(api, db):
 def test_password_hash_format_and_verify():
     """Caso 16: el hash lleva esquema y salt; verifica la correcta y no otra."""
     stored = hash_password("rabanito-123")
-    assert stored.startswith("scrypt$n=16384,r=8,p=1$")
+    assert stored.startswith(preferred_scheme() + "$")
     assert "rabanito-123" not in stored
     assert verify_password("rabanito-123", stored)
     assert not verify_password("rabanito-124", stored)
@@ -291,4 +293,4 @@ async def test_passwords_not_stored_in_plain_text(db):
     stored = [row["password_hash"] for row in await cursor.fetchall()]
     for password in PASSWORDS.values():
         assert all(password not in h for h in stored)
-    assert all(h.startswith("scrypt$") for h in stored)
+    assert all(h.startswith(preferred_scheme() + "$") for h in stored)
