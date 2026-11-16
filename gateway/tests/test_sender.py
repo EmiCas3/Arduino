@@ -64,6 +64,35 @@ def test_rejected_readings_are_kept_with_reason(cfg, buffer, backend_stub):
     assert stats["last_rejected"][0][1].startswith("suelo_pct:")
 
 
+def test_202_with_pipeline_errors_is_sent_but_not_silent(cfg, buffer, backend_stub, caplog):
+    """SYS-04: si un paso del backend falla, la lectura llegó pero el fallo se ve."""
+    fill(buffer, 2)
+    backend_stub.responses.append((202, {
+        "accepted": 2, "duplicates": 0, "rejected": [], "commands": [],
+        "errors": [{"step": "recommendation", "message": "explicación vacía"}],
+    }))
+    dispatcher, _ = make_dispatcher(cfg, buffer)
+    with caplog.at_level("INFO", logger="gateway.sender"):
+        result = dispatcher.tick()
+    assert result.kind == OK
+    assert result.errors == [("recommendation", "explicación vacía")]
+    assert buffer.stats()["counts"]["enviada"] == 2
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert errors and "recommendation" in errors[0].getMessage()
+    assert "explicación vacía" in errors[0].getMessage()
+    assert any("Lote enviado" in r.getMessage() and r.levelname == "INFO" for r in caplog.records)
+    meta = buffer.get_meta()
+    assert meta["ultimo_error"] == "recommendation: explicación vacía"
+    assert meta["ultimo_envio_ok"]
+
+
+def test_202_without_errors_field_has_no_errors(cfg, buffer, backend_stub):
+    fill(buffer, 1)
+    backend_stub.responses.append((202, {"accepted": 1, "duplicates": 0, "rejected": []}))
+    result = post_readings(cfg, buffer.next_batch(10))
+    assert result.kind == OK and result.errors == []
+
+
 def test_duplicates_count_as_sent(cfg, buffer, backend_stub):
     """Si el POST llegó pero la respuesta se perdió, el reintento da duplicadas."""
     fill(buffer, 2)

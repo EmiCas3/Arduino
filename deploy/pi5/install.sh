@@ -59,17 +59,27 @@ paso "4/7 Gateway: entorno virtual y dependencias (solo pyserial)"
 "$REPO/gateway/.venv/bin/python" -m pip install -q --upgrade pip
 "$REPO/gateway/.venv/bin/python" -m pip install -q -r "$REPO/gateway/requirements.txt"
 
-paso "5/7 backend/.env (secreto JWT fijo y ruta de la base de datos)"
+paso "5/7 backend/.env (secreto JWT fijo, token de display y ruta de la base de datos)"
 BACKEND_ENV="$REPO/backend/.env"
 if [ -f "$BACKEND_ENV" ]; then
-    echo "Ya existe; no se modifica."
+    echo "Ya existe; revisando variables nuevas…"
+    if ! grep -Eq '^SMARTGREENAI_DISPLAY_TOKEN=.+' "$BACKEND_ENV"; then
+        DISPLAY_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+        umask 077
+        printf '\n# DASH-03: token de solo lectura para la pantalla externa en la Pi\nSMARTGREENAI_DISPLAY_TOKEN=%s\n' "$DISPLAY_TOKEN" >> "$BACKEND_ENV"
+        umask 022
+        echo "Se agregó SMARTGREENAI_DISPLAY_TOKEN a $BACKEND_ENV"
+    fi
 else
     SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+    DISPLAY_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
     umask 077
     cat > "$BACKEND_ENV" <<ENV
 # Creado por deploy/pi5/install.sh. No se sube a git.
 # Secreto fijo: las sesiones sobreviven a reinicios del servicio.
 SMARTGREENAI_JWT_SECRET=$SECRET
+# DASH-03: token de solo lectura para la pantalla externa en la Pi.
+SMARTGREENAI_DISPLAY_TOKEN=$DISPLAY_TOKEN
 SMARTGREENAI_DB=$REPO/backend/smartgreenai.db
 # La Pi manda lecturas cada 10 s: si pasan 2 min sin una nueva, el dashboard
 # la marca como "dato viejo" (el default del código son 15 min).
@@ -124,6 +134,19 @@ for svc in "${SERVICES[@]}"; do
         aviso "$svc no arrancó. Revisa: journalctl -u $svc -n 50"
     fi
 done
+
+chmod +x "$DEPLOY/open-display.sh"
+AUTOSTART_DIR="$HOME/.config/autostart"
+mkdir -p "$AUTOSTART_DIR"
+cat > "$AUTOSTART_DIR/smartgreenai-display.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=SmartGreenAI Display
+Comment=Pantalla externa en tiempo real del vivero
+Exec=$DEPLOY/open-display.sh
+X-GNOME-Autostart-enabled=true
+DESKTOP
+echo "  Autostart de pantalla configurado en $AUTOSTART_DIR/smartgreenai-display.desktop"
 
 # ── Resumen ───────────────────────────────────────────────────────────
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"

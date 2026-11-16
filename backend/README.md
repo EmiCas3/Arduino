@@ -14,6 +14,7 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 | AI-02 | Condiciones inusuales: lo que se sale del patrón reciente de su sensor, con valor, rango esperado y hora |
 | AI-04 | Recomendación de riego que pesa juntas la humedad de la tierra, la temperatura y el tiempo desde el último riego |
 | AI-05 | Explicación en lenguaje claro de cada recomendación, y recomendaciones guardadas con sus entradas exactas |
+| SYS-04 | Flujo completo sensor → nube → alerta/IA → actuador: cada lote evalúa actuadores, riego, alertas y recomendación al llegar, y reporta en `errors` los pasos que fallen |
 
 También sirve el frontend (`../frontend`) desde el mismo origen.
 
@@ -122,7 +123,7 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/audit/events` | Bearer | admin, super_admin |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.10.0).
+El contrato completo está en `../openapi.yaml` (v1.11.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -136,11 +137,19 @@ El contrato completo está en `../openapi.yaml` (v1.10.0).
   más de `SMARTGREENAI_MAX_CLOCK_SKEW_SECONDS` en el futuro.
 - **El backend nunca pone la hora de la lectura**; solo agrega `received_at`.
 - Los campos que el contrato no define se ignoran sin rechazar la lectura.
-- **Después de guardar**, con cada lectura NUEVA y en orden de hora, se
-  actualiza el estado de los actuadores (ACT-04), se procesa el riego
-  (ACT-02) y se evalúan las alertas (ALERT-01). Si uno de esos pasos
-  fallara, las lecturas ya quedaron guardadas y el lote se responde igual
-  con 202 (el error va al log).
+- **Después de guardar (SYS-04)**, con cada lectura NUEVA y en orden de hora,
+  se actualiza el estado de los actuadores (ACT-04), se procesa el riego
+  (ACT-02), se evalúan las alertas (ALERT-01) y se evalúa la recomendación de
+  riego de la IA (AI-04/AI-05), que se guarda si cambió. Así el flujo
+  sensor → nube → alerta/IA → actuador corre solo, sin esperar a que alguien
+  abra el dashboard. La recomendación no se evalúa si la lectura más nueva
+  del lote ya es vieja (backfill fuera de `SMARTGREENAI_READING_STALE_MINUTES`)
+  y no estrena el historial de un vivero con `insufficient_data`.
+- **Sin fallas silenciosas:** si uno de esos pasos falla, las lecturas ya
+  quedaron guardadas y el lote se responde igual con 202, pero el error va al
+  log y regresa en `errors` (`[{"step": "recommendation", "message": "..."}]`;
+  pasos: `actuator_state`, `irrigation`, `alerts`, `recommendation`,
+  `commands`). Cada lectura rechazada también queda en el log como warning.
 - **La respuesta 202 trae `commands`**: las órdenes pendientes de ese
   gateway para el Arduino (ACT-02). También en un lote de puras duplicadas.
 

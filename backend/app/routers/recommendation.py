@@ -31,9 +31,9 @@ tabla con copias. Una recomendación sin explicación no se guarda ni se devuelv
 Permisos (AUTH-02): todos los roles; un productor solo su vivero.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from statistics import median
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -93,8 +93,40 @@ async def irrigation_recommendation(
     db: aiosqlite.Connection = Depends(get_db),
 ) -> IrrigationRecommendation:
     ensure_greenhouse_access(user, greenhouse_id)
-    now = utcnow()
+    try:
+        response = await evaluate(db, greenhouse_id, utcnow())
+    except RuntimeError:
+        raise HTTPException(503, "La recomendación no tiene explicación: no se muestra.")
+    assert response is not None  # sin on_ingest siempre se calcula
+    return response
+
+
+async def evaluate(
+    db: aiosqlite.Connection,
+    greenhouse_id: str,
+    now: datetime,
+    *,
+    occurred_at: Optional[Union[datetime, str]] = None,
+    on_ingest: bool = False,
+) -> Optional[IrrigationRecommendation]:
+    """Calcula la recomendación del vivero, la valida y la guarda si cambió.
+
+    La usan la consulta (GET) y la ingesta (SYS-04, `on_ingest=True`). Desde
+    la ingesta, `occurred_at` es la hora de la lectura más nueva del lote: si
+    ya está fuera de la ventana de lecturas frescas (un backfill viejo), no se
+    evalúa y se devuelve None. Una recomendación sin explicación levanta
+    RuntimeError y no se guarda (criterio 4 de AI-05).
+    """
     cutoff = now - timedelta(minutes=settings.reading_stale_minutes)
+    if on_ingest and occurred_at is not None:
+        latest = (
+            datetime.fromisoformat(occurred_at)
+            if isinstance(occurred_at, str) else occurred_at
+        )
+        if latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
+        if latest < cutoff:
+            return None
 
     soil = await _measured(db, greenhouse_id, "suelo_pct", cutoff)
     temperature = await _measured(db, greenhouse_id, "temp_c", cutoff)
@@ -111,7 +143,7 @@ async def irrigation_recommendation(
     result = recommendation.recommend(engine_inputs)
     explanation = explain(engine_inputs, result)
     if not is_explained(explanation):
-        raise HTTPException(503, "La recomendación no tiene explicación: no se muestra.")
+        raise RuntimeError("La recomendación no tiene explicación: no se guarda.")
 
     missing: List[str] = [
         name for name, absent in (
@@ -146,7 +178,9 @@ async def irrigation_recommendation(
         ),
         missing=missing,
     )
-    await _store_if_changed(db, response)
+    await _store_if_changed(
+        db, response, occurred_at=occurred_at, skip_initial_insufficient=on_ingest,
+    )
     return response
 
 
@@ -185,9 +219,18 @@ async def stored_recommendations(
 
 
 async def _store_if_changed(
-    db: aiosqlite.Connection, current: IrrigationRecommendation
+    db: aiosqlite.Connection,
+    current: IrrigationRecommendation,
+    *,
+    occurred_at: Optional[Union[datetime, str]] = None,
+    skip_initial_insufficient: bool = False,
 ) -> None:
-    """Guarda la recomendación si dice algo distinto de la última guardada."""
+    """Guarda la recomendación si dice algo distinto de la última guardada.
+
+    Con `skip_initial_insufficient` (desde la ingesta), un vivero sin
+    historial no estrena la tabla con un \"faltan datos\": una lectura sin
+    tierra no es una recomendación que valga la pena guardar.
+    """
     cursor = await db.execute(
         """
         SELECT outcome, urgent, tank_blocks FROM irrigation_recommendations
@@ -197,6 +240,12 @@ async def _store_if_changed(
         (current.greenhouse_id,),
     )
     last = await cursor.fetchone()
+    if (
+        skip_initial_insufficient
+        and last is None
+        and current.outcome == recommendation.Outcome.insufficient_data
+    ):
+        return
     key = (current.outcome.value, int(current.urgent), int(current.tank_blocks))
     if last is not None and tuple(last) == key:
         return
@@ -216,7 +265,7 @@ async def _store_if_changed(
         detail={"outcome": current.outcome.value, "urgent": current.urgent,
                 "tank_blocks": current.tank_blocks, "threshold": current.threshold,
                 "missing": current.missing},
-        occurred_at=current.generated_at, now=current.generated_at,
+        occurred_at=occurred_at or current.generated_at, now=current.generated_at,
     )
     await db.commit()
 

@@ -48,6 +48,9 @@ const ICONS = {
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.6a2.4 2.4 0 1 1 3.3 2.2c-.6.3-1 .8-1 1.5v.5"/><path d="M12 16.8h.01"/>',
   x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   cloudOff: '<path d="M7.5 18.5h9.8a3.7 3.7 0 0 0 .9-7.3A6 6 0 0 0 8 8.2"/><path d="M6.2 10.2a4.3 4.3 0 0 0 1.3 8.3"/><path d="M4 4l16 16"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  minimize: '<path d="M4 14h4v4M20 14h-4v4M4 10h4V6M20 10h-4V6"/>',
 };
 
 export function icon(name, extraClass = "") {

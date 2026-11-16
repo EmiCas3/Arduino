@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.10.0
+  version: 1.11.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -161,6 +161,15 @@ info:
     scrypt donde bcrypt no se puede instalar), siempre con salt; las cuentas
     anteriores se migran solas en su siguiente inicio de sesion. No cambia
     ninguna ruta ni respuesta existente.
+
+    **v1.11.0 (SYS-04, flujo completo sensor -> nube -> alerta/IA ->
+    actuador):** al recibir un lote, el backend evalua en el momento, con las
+    lecturas nuevas, el estado de los actuadores, el riego, las alertas y la
+    recomendacion de riego de la IA (AI-04/AI-05), que se guarda si cambio.
+    La respuesta de `POST /devices/{device_id}/readings` agrega `errors`
+    (schema `PipelineError`): los pasos posteriores al guardado que fallaron.
+    Las lecturas rechazadas quedan ademas en el log del backend. Un cliente
+    viejo puede ignorar el campo.
 
   contact:
     name: RadishSoftware - UPAEP, Agile Project Management
@@ -333,6 +342,18 @@ paths:
         `SG,<id>,MODO,AUTO|MANUAL` o `SG,<id>,BOMBA,ON|OFF` y el Arduino las
         confirma en sus siguientes lecturas con `cmd_id` / `cmd_err`. Ver
         `gateway/PROTOCOLO_ARDUINO.md`. Un gateway viejo puede ignorar el campo.
+
+        Flujo completo (v1.11.0, SYS-04): con las lecturas NUEVAS del lote, en
+        orden de hora, se actualiza el estado de los actuadores (ACT-04), se
+        procesa el riego (ACT-02), se evaluan las alertas (ALERT-01) y se
+        evalua la recomendacion de riego de la IA (AI-04/AI-05), que se guarda
+        y va a la bitacora si cambio. Cuando el gateway recibe el 202, la
+        alerta y la recomendacion ya existen. La recomendacion no se evalua si
+        la lectura mas nueva del lote es mas vieja que
+        `SMARTGREENAI_READING_STALE_MINUTES` (un backfill), ni estrena el
+        historial de un vivero con `insufficient_data`. Si un paso falla, las
+        lecturas quedan guardadas, el lote se responde igual con 202 y el
+        fallo regresa en `errors` (no falla en silencio).
       operationId: ingestReadings
       requestBody:
         required: true
@@ -1808,6 +1829,26 @@ components:
             gateway, en el orden en que deben escribirse.
           items:
             $ref: '#/components/schemas/GatewayCommand'
+        errors:
+          type: array
+          description: |
+            (v1.11.0, SYS-04) Errores en los pasos posteriores al guardado.
+            Vacio si todo el flujo corrio bien. Las lecturas aceptadas SI se
+            guardaron aunque haya errores.
+          items:
+            $ref: '#/components/schemas/PipelineError'
+
+    PipelineError:
+      type: object
+      required: [step, message]
+      properties:
+        step:
+          type: string
+          description: 'Paso que fallo: actuator_state | irrigation | alerts | recommendation | commands'
+          example: recommendation
+        message:
+          type: string
+          example: No se pudo evaluar la recomendacion de riego
 
     Error:
       type: object

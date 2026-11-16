@@ -14,6 +14,9 @@
 /** Segundos entre refrescos automáticos del dashboard. */
 export const REFRESH_SECONDS = 15;
 
+/** Segundos entre refrescos de la pantalla externa en tiempo real (DASH-03). */
+export const DISPLAY_REFRESH_SECONDS = 5;
+
 /**
  * Cómo se presenta cada medición. La `reference` es solo texto de ayuda:
  * - Temperatura, humedad y tierra muestran el rango ideal del rábano.
@@ -456,5 +459,152 @@ export function describeRecommendation(recommendation, clock = (iso) => iso) {
       measured("Nivel del tanque", recommendation.inputs.tank),
       { label: "Humedad en la que conviene regar", value: `${recommendation.threshold} %`, detail: "" },
     ],
+  };
+}
+
+// ── Bitácora de auditoría (AUTH-05) ───────────────────────────────────
+
+export const AUDIT_EVENT_TYPES = {
+  auth: { label: "Sesión", icon: "users", pill: "pill-plain" },
+  alert: { label: "Alerta", icon: "alert", pill: "pill-crit" },
+  actuator: { label: "Equipo", icon: "power", pill: "pill-info" },
+  recommendation: { label: "IA", icon: "drop", pill: "pill-ok" },
+};
+
+export const AUDIT_ACTIONS = {
+  login: { label: "Inicio de sesión", pill: "pill-ok" },
+  login_failed: { label: "Intento fallido", pill: "pill-warn" },
+  logout: { label: "Cierre de sesión", pill: "pill-plain" },
+  session_expired: { label: "Sesión expirada", pill: "pill-warn" },
+  alert_raised: { label: "Alerta abierta", pill: "pill-crit" },
+  alert_cleared: { label: "Alerta normalizada", pill: "pill-ok" },
+  actuator_on: { label: "Equipo encendido", pill: "pill-ok" },
+  actuator_off: { label: "Equipo apagado", pill: "pill-off" },
+  command_requested: { label: "Orden enviada", pill: "pill-info" },
+  mode_changed: { label: "Cambio de modo", pill: "pill-info" },
+  actuator_registered: { label: "Equipo registrado", pill: "pill-ok" },
+  actuator_updated: { label: "Equipo editado", pill: "pill-plain" },
+  actuator_deactivated: { label: "Equipo desactivado", pill: "pill-warn" },
+  actuator_reactivated: { label: "Equipo reactivado", pill: "pill-ok" },
+  recommendation_generated: { label: "Recomendación generada", pill: "pill-info" },
+  recommendation_accepted: { label: "Recomendación aceptada", pill: "pill-ok" },
+  recommendation_rejected: { label: "Recomendación rechazada", pill: "pill-warn" },
+};
+
+export const AUDIT_ACTORS = {
+  user: "Persona",
+  device: "Arduino",
+  system: "Plataforma",
+  anonymous: "Anónimo",
+};
+
+/**
+ * Convierte un evento de GET /audit/events en textos y estilos listos para mostrar.
+ * Respaldo seguro si llega un tipo o acción desconocida desde una versión más nueva.
+ */
+export function describeAuditEvent(event) {
+  const typeMeta = AUDIT_EVENT_TYPES[event?.event_type] || {
+    label: event?.event_type || "Evento",
+    icon: "info",
+    pill: "pill-plain",
+  };
+  const actionMeta = AUDIT_ACTIONS[event?.action] || {
+    label: event?.action || "Acción",
+    pill: typeMeta.pill,
+  };
+  const actorKind = AUDIT_ACTORS[event?.actor_type] || event?.actor_type || "Sistema";
+  const actorName = event?.actor_name || event?.actor_id || actorKind;
+
+  return {
+    typeLabel: typeMeta.label,
+    actionLabel: actionMeta.label,
+    icon: typeMeta.icon,
+    pillClass: actionMeta.pill || typeMeta.pill,
+    actorName,
+    actorKind,
+    summary: event?.summary || actionMeta.label,
+    greenhouse: event?.greenhouse_id || null,
+  };
+}
+
+// ── Pantalla externa en tiempo real (DASH-03) ──────────────────────────
+
+const GAUGE_SCALES = {
+  hum_aire_pct: 100,
+  suelo_pct: 100,
+  nivel_pct: 100,
+  luz_nivel: 1023,
+  temp_c: 45,
+  co2_ppm: 2000,
+};
+
+/** Porcentaje 0..100 para la barra visual de una tarjeta de pantalla externa. */
+export function metricGaugePercent(metric) {
+  if (metric?.value === null || metric?.value === undefined) return null;
+  const num = Number(metric.value);
+  if (Number.isNaN(num)) return null;
+  const max = GAUGE_SCALES[metric.key] ?? 100;
+  return Math.round(Math.min(100, Math.max(0, (num / max) * 100)));
+}
+
+/** Estado general del vivero para el encabezado de la pantalla externa. */
+export function displayOverallStatus({ readings = null, alerts = null, elapsed = 0 } = {}) {
+  const last = readings?.last_reading;
+  if (!readings || !last) {
+    return {
+      state: "empty",
+      label: "Sin lecturas",
+      detail: "Esperando la primera lectura de la Raspberry Pi…",
+    };
+  }
+
+  const staleAfter = (readings.stale_after_minutes ?? 2) * 60;
+  const age = (last.age_seconds ?? 0) + elapsed;
+  if (last.stale || age > staleAfter) {
+    return {
+      state: "stale",
+      label: "Datos sin actualizar",
+      detail: `Última lectura ${formatAge(age)}`,
+    };
+  }
+
+  const codes = last.alertas ?? [];
+  const states = (readings.metrics ?? []).map((m) => {
+    const metricAge = m.age_seconds === null || m.age_seconds === undefined
+      ? null
+      : m.age_seconds + elapsed;
+    return metricState(m, codes, metricAge, staleAfter).state;
+  });
+
+  const activeAlerts = alerts?.active_count
+    ?? (alerts?.alerts?.filter((a) => a.status === "active").length ?? 0);
+
+  if (states.includes("crit") || activeAlerts > 0 || last.estado === "ALERTA") {
+    return {
+      state: "crit",
+      label: activeAlerts > 0
+        ? (activeAlerts === 1 ? "1 alerta activa" : `${activeAlerts} alertas activas`)
+        : "Alerta en vivero",
+      detail: "Atención requerida en las mediciones marcadas",
+    };
+  }
+  if (states.includes("down")) {
+    return {
+      state: "down",
+      label: "Sensor sin respuesta",
+      detail: "Uno o más sensores dejaron de responder",
+    };
+  }
+  if (states.includes("warn") || last.estado === "AVISO") {
+    return {
+      state: "warn",
+      label: "Aviso en vivero",
+      detail: "Mediciones cerca del límite",
+    };
+  }
+  return {
+    state: "ok",
+    label: "Todo en rango",
+    detail: "Condiciones óptimas en el vivero",
   };
 }

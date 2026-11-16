@@ -8,6 +8,7 @@
 
 const SESSION_KEY = "sg.session";
 const FLASH_KEY = "sg.flash";
+const KIOSK_KEY = "sg.kiosk_token";
 
 let memorySession = null; // respaldo si el navegador bloquea sessionStorage
 
@@ -38,6 +39,22 @@ export function getToken() {
 export function clearSession() {
   memorySession = null;
   try { sessionStorage.removeItem(SESSION_KEY); } catch { /* nada que borrar */ }
+  try { localStorage.removeItem(KIOSK_KEY); } catch { /* nada que borrar */ }
+}
+
+/** Activa y recuerda el token de solo lectura para pantalla externa (kiosko). */
+export function activateKioskSession(token) {
+  const clean = String(token || "").trim();
+  if (!clean) return null;
+  try { localStorage.setItem(KIOSK_KEY, clean); } catch { /* usa memoria/sesión */ }
+  const session = { token: clean, user: null, expiresAt: null, idleMinutes: null, kiosk: true };
+  memorySession = session;
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch { /* usa memoria */ }
+  return session;
+}
+
+export function loadKioskToken() {
+  try { return localStorage.getItem(KIOSK_KEY); } catch { return null; }
 }
 
 /** Mensaje de una sola lectura para la siguiente pantalla (p. ej. el login). */

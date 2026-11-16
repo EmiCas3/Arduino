@@ -24,6 +24,7 @@ explícitas por endpoint; no se asume jerarquía entre roles.
 La autenticación de DISPOSITIVOS (header X-API-Key) sigue en app/auth.py.
 """
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Callable, FrozenSet, Optional
 
@@ -97,6 +98,18 @@ async def _revoke_session(
     await db.commit()
 
 
+def _is_display_allowed_request(request: Request) -> bool:
+    """Rutas de solo lectura que puede consultar el token de pantalla externa."""
+    if request.method not in ("GET", "HEAD"):
+        return False
+    path = request.url.path
+    if ".." in path.split("/"):
+        return False
+    return path in ("/api/v1/auth/me", "/api/v1/greenhouses") or path.startswith(
+        "/api/v1/greenhouses/"
+    )
+
+
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
@@ -105,6 +118,21 @@ async def get_current_user(
     """Usuario autenticado de la request actual (ver docstring del módulo)."""
     if credentials is None or not credentials.credentials:
         raise unauthorized("missing_token", "Inicia sesión para continuar.")
+
+    if settings.display_token and secrets.compare_digest(
+        credentials.credentials, settings.display_token
+    ):
+        if not _is_display_allowed_request(request):
+            raise forbidden("El token de pantalla externa es de solo lectura.")
+        return {
+            "id": 0,
+            "username": "display",
+            "email": "display@smartgreen.local",
+            "full_name": "Pantalla Externa",
+            "role": Role.admin,
+            "greenhouse_id": None,
+            "session_id": "display",
+        }
 
     try:
         payload = decode_access_token(credentials.credentials)

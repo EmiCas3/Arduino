@@ -18,7 +18,9 @@ const ADMINS = ["admin", "super_admin"];
 
 export const SECTIONS = [
   { id: "inicio", label: "Mi vivero", icon: "sprout", roles: ALL },
+  { id: "pantalla", label: "Pantalla externa", icon: "monitor", roles: ALL },
   { id: "historial", label: "Historial", icon: "chart", roles: ALL },
+  { id: "bitacora", label: "Bitácora", icon: "list", roles: ADMINS },
   { id: "configuracion", label: "Configuración", icon: "sliders", roles: ADMINS },
   { id: "plataforma", label: "Plataforma", icon: "shield", roles: ["super_admin"] },
 ];
@@ -39,7 +41,8 @@ export const PERMISSIONS = [
   { label: "Consultar cualquier vivero", roles: ADMINS },
   { label: "Ver equipos desactivados", roles: ADMINS },
   { label: "Registrar, editar y desactivar equipos", roles: ADMINS },
-  { label: "Administrar roles y bitácora (próximamente)", roles: ["super_admin"] },
+  { label: "Consultar la bitácora de auditoría por fecha y tipo", roles: ADMINS },
+  { label: "Administrar roles y permisos (próximamente)", roles: ["super_admin"] },
 ];
 
 export const ACTUATOR_TYPES = {

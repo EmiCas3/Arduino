@@ -35,10 +35,12 @@ from app.models import (
     ErrorResponse,
     GatewayCommand,
     IngestResult,
+    PipelineError,
     Reading,
     ReadingBatch,
     RejectedReading,
 )
+from app.routers import recommendation as recommendation_routes
 
 router = APIRouter(prefix="/devices", tags=["ingest"])
 logger = logging.getLogger("smartgreenai.ingest")
@@ -87,7 +89,10 @@ def ts_out_of_range(ts: datetime, now: datetime) -> Optional[str]:
         "request. La API key del header debe pertenecer al device_id de la ruta. "
         "Cada lectura se valida por separado: las inválidas regresan en "
         "`rejected` y las válidas se guardan. `ts` debe traer zona horaria y se "
-        "guarda en UTC con milisegundos."
+        "guarda en UTC con milisegundos. Con las lecturas nuevas se evalúan en "
+        "el momento (SYS-04) el estado de los actuadores, el riego, las alertas "
+        "y la recomendación de riego (IA); si un paso falla, las lecturas quedan "
+        "guardadas y el fallo regresa en `errors`."
     ),
 )
 async def ingest_readings(
@@ -105,8 +110,10 @@ async def ingest_readings(
     5. Actualizar last_seen_at del device si se guardó algo.
     6. Con las lecturas NUEVAS (no duplicadas), en orden de hora: estado de
        los actuadores (ACT-04), riego (ACT-02: confirmar órdenes, registrar
-       encendidos/apagados, re-sincronizar el modo) y alertas (ALERT-01).
-       Cuando el gateway recibe el 202, la alerta ya existe.
+       encendidos/apagados, re-sincronizar el modo), alertas (ALERT-01) y
+       recomendación de riego (AI-04/AI-05, SYS-04). Cuando el gateway recibe
+       el 202, la alerta y la recomendación ya existen. Un paso que falla
+       regresa en `errors` (no falla en silencio).
     7. Retornar 202 con IngestResult y las órdenes pendientes de este
        gateway en `commands` (ACT-02), que el gateway escribe al Arduino.
     """
@@ -120,20 +127,24 @@ async def ingest_readings(
     rejected: List[RejectedReading] = []
     new_readings: List[Tuple[str, Reading]] = []   # (ts UTC con ms, lectura)
 
+    def reject(idx: int, reason: str) -> None:
+        rejected.append(RejectedReading(index=idx, reason=reason))
+        logger.warning("Lectura rechazada de %s (índice %d): %s", device_id, idx, reason)
+
     for idx, raw in enumerate(batch.readings):
         if not isinstance(raw, dict):
-            rejected.append(RejectedReading(index=idx, reason="la lectura no es un objeto JSON"))
+            reject(idx, "la lectura no es un objeto JSON")
             continue
 
         try:
             reading = Reading.parse_obj(raw)
         except ValidationError as exc:
-            rejected.append(RejectedReading(index=idx, reason=describe_errors(exc)))
+            reject(idx, describe_errors(exc))
             continue
 
         reason = ts_out_of_range(reading.ts, now_dt)
         if reason:
-            rejected.append(RejectedReading(index=idx, reason=reason))
+            reject(idx, reason)
             continue
 
         try:
@@ -189,7 +200,7 @@ async def ingest_readings(
                 duplicates += 1
 
         except Exception as e:
-            rejected.append(RejectedReading(index=idx, reason=f"no se pudo guardar: {e}"))
+            reject(idx, f"no se pudo guardar: {e}")
 
     await db.commit()
 
@@ -203,13 +214,17 @@ async def ingest_readings(
 
     if new_readings:
         new_readings.sort(key=lambda item: item[0])
-        await _after_store(db, device_id, greenhouse_id, new_readings, now_dt)
+        errors = await _after_store(db, device_id, greenhouse_id, new_readings, now_dt)
+    else:
+        errors = []
 
+    commands = await _pending_commands(db, device_id, now_dt, errors)
     return IngestResult(
         accepted=accepted,
         duplicates=duplicates,
         rejected=rejected,
-        commands=await _pending_commands(db, device_id, now_dt),
+        commands=commands,
+        errors=errors,
     )
 
 
@@ -219,46 +234,66 @@ async def _after_store(
     greenhouse_id: str,
     new_readings: List[Tuple[str, Reading]],
     now_dt: datetime,
-) -> None:
-    """Lo que se deriva de las lecturas ya guardadas.
+) -> List[PipelineError]:
+    """Lo que se deriva de las lecturas ya guardadas (SYS-04).
 
     Cada paso se guarda por separado. Si uno falla, las lecturas ya están
     guardadas y el lote se responde igual con 202: un error aquí no debe
-    hacer que el gateway reintente el lote para siempre. Se registra en el log.
+    hacer que el gateway reintente el lote para siempre. Pero no falla en
+    silencio: se registra en el log y regresa en `errors` de la respuesta.
     """
     now = now_dt.isoformat()
+    errors: List[PipelineError] = []
     transitions: List[actuator_state.Transition] = []
-    try:
+
+    async def step(name: str, description: str, action) -> None:
+        try:
+            await action()
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("%s de %s", description, device_id)
+            errors.append(PipelineError(step=name, message=str(exc) or exc.__class__.__name__))
+
+    async def apply_actuators() -> None:
+        nonlocal transitions
         transitions = await actuator_state.apply_readings(db, device_id, new_readings, now)
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        logger.exception("No se pudo actualizar el estado de los actuadores de %s", device_id)
 
-    try:
-        await irrigation.process(db, device_id, greenhouse_id, new_readings, transitions, now_dt)
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        logger.exception("No se pudo procesar el riego de %s", device_id)
-
-    try:
-        await alerts.evaluate(db, device_id, greenhouse_id, new_readings, now)
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        logger.exception("No se pudieron evaluar las alertas de %s", device_id)
+    await step(
+        "actuator_state", "No se pudo actualizar el estado de los actuadores", apply_actuators,
+    )
+    await step(
+        "irrigation", "No se pudo procesar el riego",
+        lambda: irrigation.process(
+            db, device_id, greenhouse_id, new_readings, transitions, now_dt,
+        ),
+    )
+    await step(
+        "alerts", "No se pudieron evaluar las alertas",
+        lambda: alerts.evaluate(db, device_id, greenhouse_id, new_readings, now),
+    )
+    await step(
+        "recommendation", "No se pudo evaluar la recomendación de riego",
+        lambda: recommendation_routes.evaluate(
+            db, greenhouse_id, now_dt, occurred_at=new_readings[-1][0], on_ingest=True,
+        ),
+    )
+    return errors
 
 
 async def _pending_commands(
-    db: aiosqlite.Connection, device_id: str, now_dt: datetime
+    db: aiosqlite.Connection,
+    device_id: str,
+    now_dt: datetime,
+    errors: List[PipelineError],
 ) -> List[GatewayCommand]:
     """Órdenes que este gateway debe escribir al Arduino (ACT-02)."""
     try:
         commands = await irrigation.deliver(db, device_id, now_dt)
         await db.commit()
-    except Exception:
+    except Exception as exc:
         await db.rollback()
         logger.exception("No se pudieron entregar las órdenes de %s", device_id)
+        errors.append(PipelineError(step="commands", message=str(exc) or exc.__class__.__name__))
         return []
     return [GatewayCommand(**command) for command in commands]

@@ -202,6 +202,17 @@ class GatewayCommand(BaseModel):
     actuator_id: Optional[str] = Field(None, example="bomba-riego-01")
 
 
+class PipelineError(BaseModel):
+    """Un paso posterior al guardado que falló (SYS-04). Las lecturas sí se guardaron."""
+
+    step: str = Field(
+        ...,
+        example="recommendation",
+        description="Paso que falló: actuator_state | irrigation | alerts | recommendation | commands",
+    )
+    message: str = Field(..., example="No se pudo evaluar la recomendación de riego")
+
+
 class IngestResult(BaseModel):
     accepted: int = 0
     duplicates: int = 0
@@ -209,6 +220,10 @@ class IngestResult(BaseModel):
     commands: List[GatewayCommand] = Field(
         default_factory=list,
         description="Órdenes pendientes para el Arduino de este gateway (ACT-02)",
+    )
+    errors: List[PipelineError] = Field(
+        default_factory=list,
+        description="Errores en los pasos posteriores al guardado (SYS-04)",
     )
 
 

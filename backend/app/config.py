@@ -24,6 +24,8 @@ Variables:
                                        una orden antes de darla por perdida (45)
     SMARTGREENAI_BCRYPT_ROUNDS         Costo de bcrypt para las contraseñas, de 4 a 16 (12).
                                        Solo aplica si la librería bcrypt está instalada
+    SMARTGREENAI_DISPLAY_TOKEN         Token opcional de solo lectura para la pantalla externa
+                                       en modo kiosko (Raspberry Pi). Vacío = deshabilitado
 """
 
 import logging
@@ -114,6 +116,10 @@ class Settings:
         self.frontend_dir: Path = Path(
             os.environ.get("SMARTGREENAI_FRONTEND_DIR", "").strip() or default_frontend
         )
+
+        # DASH-03: token opcional de solo lectura para la pantalla externa (kiosko)
+        # conectada a la Raspberry Pi. Vacío = deshabilitado.
+        self.display_token: str = os.environ.get("SMARTGREENAI_DISPLAY_TOKEN", "").strip()
 
 
 settings = Settings()

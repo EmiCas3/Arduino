@@ -93,13 +93,16 @@ Tarda unos minutos. Hace esto, en 7 pasos:
 3. Crea el entorno de Python del backend (`backend/.venv`).
 4. Crea el del gateway (`gateway/.venv`, solo `pyserial`).
 5. Crea `backend/.env` con un secreto JWT **fijo** (las sesiones ya no se
-   cierran al reiniciar), la ruta de la base de datos y
+   cierran al reiniciar), el token de solo lectura de la pantalla externa
+   (`SMARTGREENAI_DISPLAY_TOKEN`), la ruta de la base de datos y
    `SMARTGREENAI_READING_STALE_MINUTES=2` (el dashboard marca un dato como
    viejo a los 2 min sin lecturas nuevas).
 6. Corre el seed (usuarios `productor`, `admin` y `superadmin` con la
    contraseña que pusiste, el gateway `pi-vivero-01` y los actuadores) y
    **guarda la API key del gateway en `gateway/.env` automáticamente**.
-7. Instala y arranca los dos servicios.
+7. Instala y arranca los dos servicios y configura el autostart gráfico
+   (`~/.config/autostart/smartgreenai-display.desktop`) para abrir `display.html`
+   en modo kiosko automáticamente al encender la Pi.
 
 Al final debe decir:
 
@@ -131,6 +134,11 @@ Al final debe decir:
    6 tarjetas (temperatura, humedad del aire, humedad de la tierra, nivel del
    tanque, luz y CO₂) con su valor, "hace N s" y su estado, y cambiar solas
    cada 15 s. En `http://smartgreen.local:8000/docs` está la API.
+3. **Display conectado a la Pi (opcional, HDMI/DSI):** si usas Raspberry Pi OS
+   con escritorio, al encender la Pi el autostart abre Chromium en pantalla
+   completa con `display.html` usando `SMARTGREENAI_DISPLAY_TOKEN` (solo
+   lectura y sin expiración por inactividad). También puedes lanzarlo a mano con
+   `bash deploy/pi5/open-display.sh`.
 
 > **Si la Pi se instaló antes de DASH-01**, su `backend/.env` no tiene el
 > ajuste de "dato viejo" (`install.sh` no toca un `.env` que ya existe).

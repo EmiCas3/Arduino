@@ -4,8 +4,9 @@ Interfaz web del vivero de rábano. Hoy cubre **AUTH-01** (login), la parte
 de UI de **AUTH-02** (menú por rol), los widgets de lecturas en vivo de
 **DASH-01**, las alertas de **ALERT-01**, los actuadores de **CONF-05**, su
 estado en vivo (**ACT-04**), el control del riego (**ACT-02**), las gráficas
-históricas de **DASH-02**, las tendencias de **AI-01** y las condiciones
-inusuales de **AI-02**.
+históricas de **DASH-02**, las tendencias de **AI-01**, las condiciones
+inusuales de **AI-02**, la recomendación explicada de **AI-05**, el dashboard
+integrado y responsive (**DASH-03**) y la bitácora de auditoría (**AUTH-05**).
 
 Es **HTML + CSS + JavaScript sin framework ni paso de build** (decisión D1 = A
 del plan del Sprint 2). FastAPI sirve esta carpeta desde el mismo origen que
@@ -29,17 +30,20 @@ frontend/
 ├── index.html        → redirige a login o al panel
 ├── login.html        → AUTH-01: usuario o correo + contraseña
 ├── panel.html        → shell con menú por rol (AUTH-02)
+├── display.html      → DASH-03: pantalla externa en tiempo real (kiosko / HDMI de la Pi)
 ├── css/styles.css    → tokens de diseño (claro/oscuro) y componentes
 ├── js/
 │   ├── api.js        → fetch a /api/v1; 401 → login; 403 → aviso
 │   ├── session.js    → JWT en sessionStorage + mensajes entre pantallas
 │   ├── roles.js      → rol → secciones del menú y pantalla de inicio
 │   ├── login.js      → lógica del login
-│   ├── panel.js      → vistas: Mi vivero, Historial, Configuración, Plataforma
+│   ├── panel.js      → vistas: Mi vivero, Pantalla externa, Historial, Bitácora, Configuración, Plataforma
 │   ├── dashboard.js  → DASH-01: tarjetas en vivo, refresco cada 15 s
+│   ├── display.js    → DASH-03: tablero en tiempo real (cada 5 s) para monitor externo
 │   ├── metrics.js    → estados y textos de los widgets (lógica pura, sin DOM)
 │   ├── alerts.js     → ALERT-01: tarjeta "Alertas", avisos flotantes y contador
 │   ├── anomalies.js  → AI-02: tarjeta "Condiciones inusuales" (aviso temprano)
+│   ├── audit.js      → AUTH-05: bitácora de auditoría con filtros y paginación
 │   ├── recommendation.js → AI-05: tarjeta "Recomendación de riego" con su explicación
 │   ├── equipment.js  → ACT-04 y ACT-02: estado de los equipos y control del riego
 │   ├── poller.js     → refresco cada 15 s compartido por los widgets nuevos
@@ -330,19 +334,28 @@ empezado con React + Vite.
 
 ### Sprint 4 (integración)
 
-1. **Estado compartido (DASH-03).** Con varias secciones vivas en una sola
-   pantalla, crear `js/store.js`: un objeto con `get()`, `set()` y
-   `subscribe()` (unas 30 líneas). Cada widget se vuelve un módulo con
-   `mount(contenedor)` y `update(datos)`. *Costo extra: ~3 h* (esto es lo que
-   React resuelve con componentes y estado).
-2. **Responsivo.** La retícula de 12 columnas y el menú móvil ya existen;
-   solo hay que revisar las vistas nuevas a 390 px.
-3. **Bitácora (AUTH-05).** Tabla con filtros y paginación reutilizando
-   `.table`. *Costo extra: ~1 h* por la paginación manual.
-4. **Pruebas end-to-end.** Agregar pruebas con Playwright (login por rol,
+1. **Dashboard unificado y navegación (DASH-03).** ✅ Hecho: en "Mi vivero"
+   (`#/inicio`) conviven lecturas actuales, recomendación de riego de la IA,
+   equipos/riego, alertas y condiciones inusuales en una sola pantalla con
+   refresco independiente por sección, barra de salto entre secciones y barra de
+   navegación inferior en móvil.
+2. **Pantalla externa en tiempo real (DASH-03).** ✅ Hecho: `display.js` y
+   `display.html` (también accesible en `panel.html#/pantalla` con modo
+   pantalla completa) ofrecen un monitor de alto contraste y lectura rápida
+   para la pantalla conectada a la Raspberry Pi, con estado global, 6 sensores
+   con barra visual, equipos y riego, recomendación IA y alertas activas con
+   refresco cada 5 s (`DISPLAY_REFRESH_SECONDS`).
+3. **Responsivo.** ✅ Hecho: `overflow-x: clip`, `.segmented` adaptable,
+   `.rec-main` apilable, tabla de bitácora transformada en tarjetas en `<560 px`
+   y sin scroll horizontal en móvil.
+4. **Bitácora (AUTH-05).** ✅ Hecho: `audit.js` + `describeAuditEvent()` en
+   `metrics.js`, accesible en `#/bitacora` (admin / super admin) y `#/plataforma`
+   con filtros por rango/fechas, tipo de evento, actor y vivero, más paginación
+   y refresco cada 30 s.
+5. **Pruebas end-to-end.** Agregar pruebas con Playwright (login por rol,
    403, sesión expirada). Ya se usaron para revisar estas pantallas.
    *~3 h, igual con o sin framework.*
-5. **Caché del navegador.** Al desplegar, agregar `?v=<versión>` a los
+6. **Caché del navegador.** Al desplegar, agregar `?v=<versión>` a los
    `<script>` y `<link>` para que nadie se quede con un JS viejo.
 
 **Costo extra de seguir con esta opción: 10 a 12 h**, repartidas en los

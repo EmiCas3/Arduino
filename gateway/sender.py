@@ -52,6 +52,7 @@ class SendResult:
     rejected: List[Tuple[int, str]] = field(default_factory=list)  # (índice, motivo)
     message: str = ""
     commands: List[dict] = field(default_factory=list)  # órdenes para el Arduino (ACT-02)
+    errors: List[Tuple[str, str]] = field(default_factory=list)  # (paso, mensaje) del pipeline (SYS-04)
 
 
 class Backoff:
@@ -128,6 +129,12 @@ def post_readings(cfg: Config, rows: List[Row]) -> SendResult:
             commands = data.get("commands") or []
             if isinstance(commands, list):
                 result.commands = [c for c in commands if isinstance(c, dict)]
+            errors = data.get("errors") or []
+            if isinstance(errors, list):
+                result.errors = [
+                    (str(item.get("step", "")), str(item.get("message", "")))
+                    for item in errors if isinstance(item, dict)
+                ]
         except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
             result.message = "202 con una respuesta que no se pudo leer"
         return result
@@ -232,6 +239,12 @@ class Dispatcher:
         self.buffer.mark_sent(sent_ids, sent_at)
         if result.commands and self.on_commands is not None:
             self.on_commands(result.commands)
+        for step, message in result.errors:
+            # SYS-04: un paso roto en el backend no debe fallar en silencio.
+            log.error("El backend reportó un fallo en %s al procesar el lote: %s", step, message)
+        if result.errors:
+            step, message = result.errors[-1]
+            self.buffer.set_meta(ultimo_error=f"{step}: {message}", ultimo_error_en=sent_at)
 
         recovered = self.failing
         if recovered:
@@ -243,7 +256,8 @@ class Dispatcher:
         pending = self.buffer.stats()["counts"]["pendiente"]
         # Los envíos de rutina (cada 10 s) van a DEBUG para no llenar el journal;
         # vaciar el buffer, recuperarse o tener rechazos sí se ven en INFO.
-        notable = recovered or rejected or pending or len(rows) >= self.cfg.batch_size
+        notable = (recovered or rejected or result.errors or pending
+                   or len(rows) >= self.cfg.batch_size)
         log.log(logging.INFO if notable else logging.DEBUG,
                 "Lote enviado: %d lecturas (%s). Pendientes: %d.", len(rows), summary, pending)
         self.buffer.set_meta(ultimo_envio_ok=sent_at, ultimo_envio_resumen=summary)

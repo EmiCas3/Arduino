@@ -3,10 +3,13 @@
  *
  * Secciones (roles.js):
  *   #/inicio         todos           lecturas en vivo (DASH-01), recomendación de riego
- *                                    (AI-05), alertas (ALERT-01) y estado de los equipos (ACT-04)
+ *                                    (AI-05), equipos y riego (ACT-04/ACT-02), alertas
+ *                                    (ALERT-01) y anomalías (AI-02) en un dashboard (DASH-03)
+ *   #/pantalla       todos           dashboard en tiempo real para pantalla externa (DASH-03)
  *   #/historial      todos           gráficas históricas (DASH-02) y tendencias (AI-01)
+ *   #/bitacora       admin, super    bitácora de auditoría (AUTH-05)
  *   #/configuracion  admin, super    actuadores registrados (CONF-05)
- *   #/plataforma     super           permisos por rol y módulos próximos
+ *   #/plataforma     super           permisos por rol y bitácora (AUTH-05)
  *
  * El menú solo muestra lo que el rol puede usar, pero el control real es del
  * servidor: si una llamada responde 403 se muestra el aviso y nada más.
@@ -14,7 +17,9 @@
 import { apiFetch, ApiError } from "./api.js";
 import { mountAlerts } from "./alerts.js";
 import { mountAnomalies } from "./anomalies.js";
+import { mountAudit } from "./audit.js";
 import { mountLiveReadings } from "./dashboard.js";
+import { mountDisplay } from "./display.js";
 import { mountEquipment } from "./equipment.js";
 import { mountHistory } from "./history.js";
 import { mountRecommendation } from "./recommendation.js";
@@ -53,7 +58,19 @@ async function boot() {
   menuBtn.replaceChildren(icon("menu"));
   menuBtn.addEventListener("click", () => setNavOpen(!app.classList.contains("nav-open")));
   backdrop.addEventListener("click", () => setNavOpen(false));
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setNavOpen(false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      setNavOpen(false);
+      if (app.classList.contains("is-kiosk")) {
+        app.classList.remove("is-kiosk");
+        const kioskBtn = document.getElementById("kiosk-toggle");
+        if (kioskBtn) {
+          kioskBtn.replaceChildren(icon("maximize", "icon-sm"), "Pantalla completa");
+          kioskBtn.setAttribute("aria-pressed", "false");
+        }
+      }
+    }
+  });
   document.getElementById("logout-btn").addEventListener("click", logout);
 
   if (!loadSession()?.token) {
@@ -110,6 +127,23 @@ function renderShell() {
         icon(section.icon), section.label)
     ),
   );
+
+  let mobileNav = document.getElementById("mobile-nav");
+  if (!mobileNav) {
+    mobileNav = h("nav", {
+      class: "mobile-nav only-mobile",
+      id: "mobile-nav",
+      "aria-label": "Navegación rápida",
+    });
+    const mainEl = app.querySelector(".main");
+    if (mainEl) mainEl.append(mobileNav);
+  }
+  mobileNav.replaceChildren(
+    ...sectionsFor(user.role).map((section) =>
+      h("a", { class: "mobile-nav-link", href: `#/${section.id}`, dataset: { section: section.id } },
+        icon(section.icon, "icon-sm"), h("span", {}, section.label))
+    ),
+  );
 }
 
 function currentSectionId() {
@@ -119,6 +153,7 @@ function currentSectionId() {
 
 function route() {
   setNavOpen(false);
+  app.classList.remove("is-kiosk");
   // Al cambiar de sección se detiene el refresco de la anterior: sin esto
   // quedarían intervalos pidiendo lecturas para una vista que ya no existe.
   if (state.cleanup) {
@@ -129,7 +164,7 @@ function route() {
   const id = currentSectionId();
   const section = SECTIONS.find((s) => s.id === id);
 
-  for (const link of nav.querySelectorAll(".nav-link")) {
+  for (const link of document.querySelectorAll(".nav-link, .mobile-nav-link")) {
     if (link.dataset.section === id) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
@@ -210,13 +245,22 @@ function renderInicio() {
   const anomaliesBody = h("div", { class: "alerts" }, loadingLines(2));
   const anomaliesCount = h("div", { class: "alerts-count" });
 
+  const jumps = [
+    { id: "sec-sensores", label: "Sensores" },
+    { id: "sec-ia", label: "Recomendación IA" },
+    { id: "sec-equipos", label: "Equipos y riego" },
+    { id: "sec-alertas", label: "Alertas" },
+    { id: "sec-anomalias", label: "Condiciones inusuales" },
+  ];
+  const otherSections = sectionsFor(user.role).filter((s) => s.id !== "inicio");
+
   view.replaceChildren(
     pageHead({
       eyebrow: today(),
       title: `Hola, ${firstName(user)}`,
       text: greenhouse
-        ? "Este es el resumen de tu vivero: sus lecturas en vivo, sus alertas y sus equipos."
-        : "Elige un vivero para ver sus lecturas en vivo, sus alertas y sus equipos.",
+        ? "Sensores, recomendación de IA, alertas y equipos del vivero en una sola pantalla."
+        : "Elige un vivero para ver sus sensores, recomendación de IA, alertas y equipos en una sola pantalla.",
       meta: [
         rolePill(user.role),
         greenhouse
@@ -224,8 +268,22 @@ function renderInicio() {
           : h("span", { class: "pill pill-plain" }, "Todos los viveros"),
       ],
     }),
+    h("nav", { class: "section-nav", "aria-label": "Secciones del panel" },
+      h("div", { class: "section-nav-group" },
+        jumps.map((item) => h("button", {
+          class: "section-jump",
+          type: "button",
+          onclick: () => document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" }),
+        }, item.label))),
+      otherSections.length
+        ? h("div", { class: "section-nav-links" },
+            otherSections.map((section) => h("a", {
+              class: "section-nav-link",
+              href: `#/${section.id}`,
+            }, icon(section.icon, "icon-sm"), section.label)))
+        : null),
     h("div", { class: "grid" },
-      h("section", { class: "card span-12", "aria-labelledby": "t-estado" },
+      h("section", { class: "card span-12", id: "sec-sensores", "aria-labelledby": "t-estado" },
         h("div", { class: "card-head" },
           h("div", {},
             h("h2", { id: "t-estado" }, "Estado actual"),
@@ -233,25 +291,25 @@ function renderInicio() {
           picker),
         liveBody),
 
-      h("section", { class: "card span-12", "aria-labelledby": "t-riego" },
+      h("section", { class: "card span-6", id: "sec-ia", "aria-labelledby": "t-riego" },
         cardHead("Recomendación de riego", "Qué conviene hacer con el riego y por qué, según la tierra, la temperatura y el último riego.", recommendationPill, "t-riego"),
         recommendationBody),
 
-      h("section", { class: "card span-12", "aria-labelledby": "t-alertas" },
-        cardHead("Alertas", "Cuando el Arduino reporta que una medición cruzó su límite. Aparecen solas, sin recargar.", alertsCount, "t-alertas"),
-        alertsBody),
-
-      h("section", { class: "card span-12", "aria-labelledby": "t-anomalias" },
-        cardHead("Condiciones inusuales", "Cuando una medición se sale de lo que su sensor venía haciendo, aunque siga dentro de los límites. No es una alerta: es un aviso temprano.", anomaliesCount, "t-anomalias"),
-        anomaliesBody),
-
-      h("section", { class: "card span-7", "aria-labelledby": "t-equipos" },
+      h("section", { class: "card span-6", id: "sec-equipos", "aria-labelledby": "t-equipos" },
         cardHead("Equipos del vivero", "Lo que el Arduino reporta de cada equipo y el control del riego. Se actualiza solo cada 15 s.", null, "t-equipos"),
         equipmentBody),
 
-      h("section", { class: "card span-5", "aria-labelledby": "t-acceso" },
+      h("section", { class: "card span-6", id: "sec-alertas", "aria-labelledby": "t-alertas" },
+        cardHead("Alertas", "Cuando el Arduino reporta que una medición cruzó su límite. Aparecen solas, sin recargar.", alertsCount, "t-alertas"),
+        alertsBody),
+
+      h("section", { class: "card span-6", id: "sec-anomalias", "aria-labelledby": "t-anomalias" },
+        cardHead("Condiciones inusuales", "Cuando una medición se sale de lo que su sensor venía haciendo, aunque siga dentro de los límites. No es una alerta: es un aviso temprano.", anomaliesCount, "t-anomalias"),
+        anomaliesBody),
+
+      h("section", { class: "card span-12", id: "sec-acceso", "aria-labelledby": "t-acceso" },
         cardHead("Tu acceso", `Lo que puede hacer un ${ROLE_LABELS[user.role]}.`, null, "t-acceso"),
-        h("div", {},
+        h("div", { class: "perm-grid" },
           PERMISSIONS.map((p) => {
             const allowed = p.roles.includes(user.role);
             return h("div", { class: `perm ${allowed ? "perm-yes" : "perm-no"}` },
@@ -368,6 +426,84 @@ function noGreenhouseNotice() {
     producer
       ? "Pídele a un Administrador que te asigne uno."
       : "Cuando se registre un gateway, su vivero aparecerá aquí.");
+}
+
+// ── Vista: Pantalla externa (DASH-03) ─────────────────────────────────
+
+function renderPantalla() {
+  const { user } = state;
+  const picker = h("div", { class: "greenhouse-picker" });
+  const body = h("div", {}, loadingLines(4));
+
+  const kioskBtn = h("button", {
+    class: "btn btn-quiet btn-sm",
+    id: "kiosk-toggle",
+    type: "button",
+    "aria-pressed": "false",
+  }, icon("maximize", "icon-sm"), "Pantalla completa");
+
+  const paintKioskBtn = () => {
+    const active = app.classList.contains("is-kiosk");
+    kioskBtn.replaceChildren(
+      icon(active ? "minimize" : "maximize", "icon-sm"),
+      active ? "Salir pantalla completa" : "Pantalla completa",
+    );
+    kioskBtn.setAttribute("aria-pressed", String(active));
+  };
+
+  kioskBtn.addEventListener("click", async () => {
+    const entering = !app.classList.contains("is-kiosk");
+    app.classList.toggle("is-kiosk", entering);
+    paintKioskBtn();
+    try {
+      if (entering && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      } else if (!entering && document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
+    } catch { /* fallback CSS is-kiosk sigue activo */ }
+  });
+
+  const onFullscreenChange = () => {
+    if (!document.fullscreenElement && app.classList.contains("is-kiosk")) {
+      app.classList.remove("is-kiosk");
+      paintKioskBtn();
+    }
+  };
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+
+  const standaloneLink = h("a", {
+    class: "btn btn-quiet btn-sm",
+    href: "display.html",
+    title: "Abrir versión independiente sin menú lateral",
+  }, icon("monitor", "icon-sm"), "Vista independiente");
+
+  const controlsSlot = h("div", { class: "display-slot-actions" }, kioskBtn, standaloneLink);
+
+  view.replaceChildren(
+    pageHead({
+      eyebrow: "Display Raspberry Pi · Tiempo real",
+      title: "Pantalla externa",
+      text: "Lectura rápida de sensores, equipos, recomendación IA y alertas con actualización automática cada 5 segundos.",
+      meta: [
+        rolePill(user.role),
+        user.greenhouse_id
+          ? h("span", { class: "pill pill-plain" }, icon("sprout", "icon-sm"), user.greenhouse_id)
+          : h("span", { class: "pill pill-plain" }, "Monitor en vivo"),
+      ],
+    }),
+    body,
+  );
+
+  return withGreenhouse({
+    picker,
+    mount: (greenhouseId) => [
+      mountDisplay(body, greenhouseId, { picker, kioskToggle: controlsSlot }),
+      () => document.removeEventListener("fullscreenchange", onFullscreenChange),
+    ],
+    onError: (error) => body.replaceChildren(errorNotice(error)),
+    onEmpty: () => body.replaceChildren(noGreenhouseNotice()),
+  });
 }
 
 // ── Vista: Historial (DASH-02 / AI-01) ────────────────────────────────
@@ -493,15 +629,36 @@ async function loadActuatorTable(container) {
   }
 }
 
+// ── Vista: Bitácora (admins, AUTH-05) ─────────────────────────────────
+
+function renderBitacora() {
+  const auditBody = h("div", { class: "audit" });
+  view.replaceChildren(
+    pageHead({
+      eyebrow: "Auditoría",
+      title: "Bitácora de auditoría",
+      text: "Inicios de sesión, alertas, acciones sobre los equipos y recomendaciones de la IA. Cada registro conserva actor, acción y hora.",
+      meta: [rolePill(state.user.role)],
+    }),
+    h("div", { class: "grid" },
+      h("section", { class: "card span-12", "aria-labelledby": "t-bitacora" },
+        cardHead("Eventos registrados", "Filtra por rango de fechas, tipo de evento, actor o vivero. Se actualiza solo cada 30 s.", null, "t-bitacora"),
+        auditBody),
+    ),
+  );
+  state.cleanup = mountAudit(auditBody);
+}
+
 // ── Vista: Plataforma (super admin) ───────────────────────────────────
 
 function renderPlataforma() {
   const roles = ["producer", "admin", "super_admin"];
+  const auditBody = h("div", { class: "audit" });
   view.replaceChildren(
     pageHead({
       eyebrow: "Plataforma",
-      title: "Roles y permisos",
-      text: "Qué puede hacer cada rol hoy. El servidor aplica estas reglas en cada solicitud; ocultar opciones en el menú no basta.",
+      title: "Roles, permisos y bitácora",
+      text: "Qué puede hacer cada rol hoy y el registro central de auditoría. El servidor aplica estas reglas en cada solicitud.",
       meta: [rolePill(state.user.role)],
     }),
     h("div", { class: "grid" },
@@ -520,14 +677,18 @@ function renderPlataforma() {
                     ? h("span", { class: "yes" }, icon("check"), h("span", { class: "sr-only" }, "Sí"))
                     : h("span", { class: "no" }, icon("minus"), h("span", { class: "sr-only" }, "No")))))))))),
 
-      soonCard("users", "Usuarios y roles configurables", "Crear roles y elegir sus permisos.", "AUTH-04"),
-      soonCard("list", "Bitácora de auditoría", "Inicios de sesión, alertas y acciones sobre equipos.", "AUTH-05"),
+      h("section", { class: "card span-12", "aria-labelledby": "t-plataforma-bitacora" },
+        cardHead("Bitácora de auditoría", "Inicios de sesión, alertas, acciones sobre equipos y recomendaciones de la IA.", null, "t-plataforma-bitacora"),
+        auditBody),
+
+      soonCard("users", "Usuarios y roles configurables", "Crear roles y elegir sus permisos.", "AUTH-04", "span-12"),
     ),
   );
+  state.cleanup = mountAudit(auditBody);
 }
 
-function soonCard(iconName, title, text, tag) {
-  return h("section", { class: "card card-flat span-6" },
+function soonCard(iconName, title, text, tag, span = "span-6") {
+  return h("section", { class: `card card-flat ${span}` },
     h("div", { class: "soon" },
       h("span", { class: "equip-icon" }, icon(iconName)),
       h("div", {}, h("div", { class: "list-title" }, title), h("p", { class: "list-sub" }, text))),
@@ -556,7 +717,9 @@ function renderFatal(error) {
 
 const VIEWS = {
   inicio: renderInicio,
+  pantalla: renderPantalla,
   historial: renderHistorial,
+  bitacora: renderBitacora,
   configuracion: renderConfiguracion,
   plataforma: renderPlataforma,
 };

@@ -15,17 +15,25 @@ import { test } from "node:test";
 const source = await readFile(new URL("../js/metrics.js", import.meta.url), "utf8");
 const {
   ALERTS,
+  AUDIT_ACTIONS,
+  AUDIT_ACTORS,
+  AUDIT_EVENT_TYPES,
+  DISPLAY_REFRESH_SECONDS,
   METRICS,
   POWER_LABELS,
+  REFRESH_SECONDS,
   alertTitle,
   alertsFor,
   commandFeedback,
   describeAlert,
   describeAnomaly,
+  describeAuditEvent,
   describeRecommendation,
+  displayOverallStatus,
   eventText,
   formatDuration,
   formatMeasure,
+  metricGaugePercent,
   modeHelp,
   newActiveAlerts,
   titleWithCount,
@@ -408,4 +416,156 @@ test("una recomendación sin explicación no se muestra", () => {
 test("una recomendación urgente no deja marcadas a las siguientes", () => {
   assert.equal(describeRecommendation({ ...RECOMMENDATION, urgent: true }, clock).pill.text, "Regar ya");
   assert.equal(describeRecommendation(RECOMMENDATION, clock).pill.text, "Regar");
+});
+
+// ── Bitácora de auditoría (AUTH-05) ───────────────────────────────────
+
+test("cada evento de la bitácora se traduce con actor, acción y estilo", () => {
+  const alertEvent = describeAuditEvent({
+    event_type: "alert",
+    action: "alert_raised",
+    actor_type: "device",
+    actor_id: "pi-vivero-01",
+    actor_name: "pi-vivero-01",
+    greenhouse_id: "vivero-rabano-01",
+    summary: "Alerta TEMP_ALTA: temp_c en 31.2",
+  });
+  assert.deepEqual(alertEvent, {
+    typeLabel: "Alerta",
+    actionLabel: "Alerta abierta",
+    icon: "alert",
+    pillClass: "pill-crit",
+    actorName: "pi-vivero-01",
+    actorKind: "Arduino",
+    summary: "Alerta TEMP_ALTA: temp_c en 31.2",
+    greenhouse: "vivero-rabano-01",
+  });
+
+  const anonEvent = describeAuditEvent({
+    event_type: "auth",
+    action: "login_failed",
+    actor_type: "anonymous",
+    actor_id: null,
+    actor_name: null,
+    greenhouse_id: null,
+    summary: "Intento de inicio de sesión con cuenta desconocida",
+  });
+  assert.equal(anonEvent.actorName, "Anónimo");
+  assert.equal(anonEvent.actorKind, "Anónimo");
+  assert.equal(anonEvent.greenhouse, null);
+});
+
+test("catálogo de tipos, actores y acciones de bitácora completo y con respaldo seguro", () => {
+  assert.deepEqual(Object.keys(AUDIT_EVENT_TYPES).sort(), ["actuator", "alert", "auth", "recommendation"]);
+  assert.deepEqual(Object.keys(AUDIT_ACTORS).sort(), ["anonymous", "device", "system", "user"]);
+  assert.ok(AUDIT_ACTIONS.recommendation_accepted && AUDIT_ACTIONS.recommendation_rejected);
+
+  const fallback = describeAuditEvent({
+    event_type: "nuevo_tipo",
+    action: "nueva_accion",
+    actor_type: "otro",
+  });
+  assert.equal(fallback.typeLabel, "nuevo_tipo");
+  assert.equal(fallback.actionLabel, "nueva_accion");
+  assert.equal(fallback.actorName, "otro");
+  assert.equal(fallback.pillClass, "pill-plain");
+});
+
+// ── Pantalla externa en tiempo real (DASH-03) ──────────────────────────
+
+test("DISPLAY_REFRESH_SECONDS es 5 s y más rápido que el dashboard normal", () => {
+  assert.equal(DISPLAY_REFRESH_SECONDS, 5);
+  assert.ok(DISPLAY_REFRESH_SECONDS < REFRESH_SECONDS);
+});
+
+test("metricGaugePercent devuelve null para valores vacíos y escala cada sensor entre 0 y 100", () => {
+  assert.equal(metricGaugePercent(metric({ value: null })), null);
+  assert.equal(metricGaugePercent(metric({ value: undefined })), null);
+  assert.equal(metricGaugePercent(metric({ value: Number.NaN })), null);
+
+  assert.equal(metricGaugePercent({ key: "hum_aire_pct", value: 65.4 }), 65);
+  assert.equal(metricGaugePercent({ key: "suelo_pct", value: -5 }), 0);
+  assert.equal(metricGaugePercent({ key: "nivel_pct", value: 120 }), 100);
+  assert.equal(metricGaugePercent({ key: "luz_nivel", value: 512 }), 50);
+  assert.equal(metricGaugePercent({ key: "temp_c", value: 22.5 }), 50);
+  assert.equal(metricGaugePercent({ key: "co2_ppm", value: 1000 }), 50);
+  assert.equal(metricGaugePercent({ key: "otro", value: 42 }), 42);
+});
+
+test("displayOverallStatus respeta prioridad: empty > stale > crit > down > warn > ok", () => {
+  assert.equal(displayOverallStatus().state, "empty");
+  assert.equal(displayOverallStatus({ readings: { metrics: [], last_reading: null } }).state, "empty");
+
+  const baseReadings = (overrides = {}, metrics = [metric()]) => ({
+    stale_after_minutes: 2,
+    metrics,
+    last_reading: {
+      estado: "OK",
+      alertas: [],
+      age_seconds: 5,
+      stale: false,
+      ...overrides,
+    },
+  });
+
+  // stale vence incluso a alertas
+  const stale = displayOverallStatus({
+    readings: baseReadings({ stale: true, estado: "ALERTA", alertas: ["TEMP_ALTA"] }),
+    alerts: { active_count: 2 },
+  });
+  assert.equal(stale.state, "stale");
+
+  // stale por tiempo transcurrido
+  const staleByAge = displayOverallStatus({
+    readings: baseReadings({ age_seconds: 100 }),
+    elapsed: 30,
+  });
+  assert.equal(staleByAge.state, "stale");
+
+  // crit por alertas activas
+  const critCount = displayOverallStatus({
+    readings: baseReadings(),
+    alerts: { active_count: 1 },
+  });
+  assert.equal(critCount.state, "crit");
+  assert.equal(critCount.label, "1 alerta activa");
+
+  const critPlural = displayOverallStatus({
+    readings: baseReadings({ estado: "ALERTA" }),
+    alerts: { active_count: 3 },
+  });
+  assert.equal(critPlural.state, "crit");
+  assert.equal(critPlural.label, "3 alertas activas");
+
+  // crit vence a down
+  const critBeatsDown = displayOverallStatus({
+    readings: baseReadings(
+      { alertas: ["TEMP_ALTA", "FALLA_SUELO"] },
+      [metric(), metric({ key: "suelo_pct", sensor_down: true })],
+    ),
+  });
+  assert.equal(critBeatsDown.state, "crit");
+  assert.equal(critBeatsDown.label, "Alerta en vivero");
+
+  // down vence a warn
+  const downBeatsWarn = displayOverallStatus({
+    readings: baseReadings(
+      { estado: "AVISO", alertas: ["TEMP_ALTA_LEVE", "FALLA_SUELO"] },
+      [metric(), metric({ key: "suelo_pct", sensor_down: true })],
+    ),
+  });
+  assert.equal(downBeatsWarn.state, "down");
+
+  // warn
+  const warn = displayOverallStatus({
+    readings: baseReadings({ estado: "AVISO", alertas: ["TEMP_ALTA_LEVE"] }),
+  });
+  assert.equal(warn.state, "warn");
+
+  // ok
+  const ok = displayOverallStatus({
+    readings: baseReadings(),
+    alerts: { active_count: 0 },
+  });
+  assert.equal(ok.state, "ok");
 });
