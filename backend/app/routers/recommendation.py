@@ -1,8 +1,10 @@
 """
-Recomendación de riego del vivero (AI-04) y su explicación (AI-05).
+Recomendación de riego del vivero (AI-04), su explicación (AI-05) y la
+decisión de una persona sobre ella (AI-07).
 
-    GET /greenhouses/{greenhouse_id}/irrigation/recommendation
-    GET /greenhouses/{greenhouse_id}/irrigation/recommendations
+    GET  /greenhouses/{greenhouse_id}/irrigation/recommendation
+    GET  /greenhouses/{greenhouse_id}/irrigation/recommendations
+    POST /greenhouses/{greenhouse_id}/irrigation/recommendations/{id}/decision
 
 Junta lo que consume la recomendación — humedad de la tierra, temperatura,
 último riego y, como aviso, el tanque — y le pasa todo a app/recommendation.py,
@@ -28,15 +30,23 @@ explicación. Con el refresco del dashboard, guardar cada consulta llenaría la
 tabla con copias. Una recomendación sin explicación no se guarda ni se devuelve
 (criterio 4 de AI-05).
 
+Decisión (AI-07): una persona acepta o rechaza la recomendación guardada
+que tiene en pantalla, una sola vez, y queda con su nombre y la hora (también
+en la bitácora). Solo se decide la más reciente del vivero: una vieja ya no
+describe lo que pasa ahora. Aceptar NO riega: el riego lo dispara la persona
+con la orden manual de ACT-02, desde la misma tarjeta. Así la decisión final
+sigue en sus manos y se respetan las reglas de la bomba (modo manual, tanque).
+
 Permisos (AUTH-02): todos los roles; un productor solo su vivero.
 """
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from typing import List, Optional, Union
 
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 
 from app import audit, history
 from app import metrics as metric_catalog
@@ -52,10 +62,13 @@ from app.dependencies import (
 )
 from app.explanation import explain, is_explained
 from app.models import (
+    DecisionEnum,
     ErrorResponse,
     IrrigationInput,
     IrrigationRecommendation,
     MeasuredInput,
+    RecommendationDecision,
+    RecommendationDecisionCreate,
     RecommendationExplanation,
     RecommendationHistory,
     RecommendationInputs,
@@ -70,6 +83,11 @@ router = APIRouter(
 
 # Minutos de lecturas que entran a la mediana de cada medición.
 SMOOTHING_MINUTES = 5
+
+# Sin dato de la tierra o con la bomba regando no hay nada que decidir.
+NOT_DECIDABLE = (
+    recommendation.Outcome.insufficient_data, recommendation.Outcome.irrigating,
+)
 
 
 @router.get(
@@ -98,6 +116,8 @@ async def irrigation_recommendation(
     except RuntimeError:
         raise HTTPException(503, "La recomendación no tiene explicación: no se muestra.")
     assert response is not None  # sin on_ingest siempre se calcula
+    if response.id is not None:
+        response.decision = (await _decisions(db, [response.id])).get(response.id)
     return response
 
 
@@ -178,7 +198,7 @@ async def evaluate(
         ),
         missing=missing,
     )
-    await _store_if_changed(
+    response.id = await _store_if_changed(
         db, response, occurred_at=occurred_at, skip_initial_insufficient=on_ingest,
     )
     return response
@@ -203,19 +223,122 @@ async def stored_recommendations(
     ensure_greenhouse_access(user, greenhouse_id)
     cursor = await db.execute(
         """
-        SELECT payload FROM irrigation_recommendations
+        SELECT id, payload FROM irrigation_recommendations
         WHERE greenhouse_id = ?
         ORDER BY id DESC LIMIT ?
         """,
         (greenhouse_id, limit),
     )
-    return RecommendationHistory(
-        greenhouse_id=greenhouse_id,
-        items=[
-            IrrigationRecommendation.parse_raw(row["payload"])
-            for row in await cursor.fetchall()
-        ],
+    rows = await cursor.fetchall()
+    decisions = await _decisions(db, [row["id"] for row in rows])
+    items = []
+    for row in rows:
+        item = IrrigationRecommendation.parse_raw(row["payload"])
+        item.id = row["id"]
+        item.decision = decisions.get(row["id"])
+        items.append(item)
+    return RecommendationHistory(greenhouse_id=greenhouse_id, items=items)
+
+
+def _decision_error(status: int, error: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status, detail={"error": error, "message": message})
+
+
+@router.post(
+    "/{greenhouse_id}/irrigation/recommendations/{recommendation_id}/decision",
+    response_model=RecommendationDecision,
+    status_code=201,
+    responses={code: {"model": ErrorResponse} for code in (401, 403, 404, 409, 422)},
+    summary="Aceptar o rechazar una recomendación de riego",
+    description=(
+        "Guarda la decisión de la persona con su nombre y la hora, y la deja en "
+        "la bitácora. Una sola vez por recomendación y solo sobre la más "
+        "reciente del vivero. Aceptar no riega: el riego se dispara con la orden "
+        "manual de la bomba (POST /actuators/{actuator_id}/commands)."
+    ),
+)
+async def decide_recommendation(
+    body: RecommendationDecisionCreate = Body(...),
+    greenhouse_id: str = Path(..., min_length=1, max_length=64),
+    recommendation_id: int = Path(..., ge=1),
+    user: dict = Depends(require_roles(*ALL_ROLES)),
+    db: aiosqlite.Connection = Depends(get_db),
+) -> RecommendationDecision:
+    ensure_greenhouse_access(user, greenhouse_id)
+    cursor = await db.execute(
+        """
+        SELECT id, outcome, payload FROM irrigation_recommendations
+        WHERE id = ? AND greenhouse_id = ?
+        """,
+        (recommendation_id, greenhouse_id),
     )
+    row = await cursor.fetchone()
+    if row is None:
+        raise _decision_error(404, "not_found", "Esa recomendación no existe en este vivero.")
+    if recommendation.Outcome(row["outcome"]) in NOT_DECIDABLE:
+        raise _decision_error(
+            422, "not_decidable", "Esta recomendación no pide ninguna decisión.")
+    cursor = await db.execute(
+        "SELECT MAX(id) AS newest FROM irrigation_recommendations WHERE greenhouse_id = ?",
+        (greenhouse_id,),
+    )
+    if (await cursor.fetchone())["newest"] != recommendation_id:
+        raise _decision_error(
+            409, "superseded", "Ya hay una recomendación más nueva: decide sobre esa.")
+
+    now = utcnow()
+    decided_at = history.ts_text(now)   # lo que se guarda (milisegundos)
+    actor = audit.user_actor(user)
+    decision = RecommendationDecision(
+        decision=body.decision, user_id=user["id"], user_name=actor["actor_name"],
+        decided_at=datetime.fromisoformat(decided_at),
+    )
+    try:
+        await db.execute(
+            """
+            INSERT INTO recommendation_decisions
+                (recommendation_id, greenhouse_id, decision, user_id, user_name, decided_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (recommendation_id, greenhouse_id, decision.decision.value, user["id"],
+             decision.user_name, decided_at),
+        )
+    except sqlite3.IntegrityError:
+        raise _decision_error(
+            409, "already_decided", "Alguien ya decidió sobre esta recomendación.")
+
+    summary = IrrigationRecommendation.parse_raw(row["payload"]).explanation.summary
+    verb = "Aceptó" if decision.decision == DecisionEnum.accepted else "Rechazó"
+    # Bitácora (AUTH-05), en la misma transacción que la decisión.
+    await audit.record(
+        db, action=f"recommendation_{decision.decision.value}", actor=actor,
+        greenhouse_id=greenhouse_id, target_type="recommendation",
+        target_id=recommendation_id, summary=f"{verb} la recomendación: {summary}",
+        detail={"outcome": row["outcome"]}, occurred_at=now, now=now,
+    )
+    await db.commit()
+    return decision
+
+
+async def _decisions(db: aiosqlite.Connection, ids: List[int]) -> dict:
+    """{id de recomendación: su decisión} de las que tienen una."""
+    if not ids:
+        return {}
+    cursor = await db.execute(
+        f"""
+        SELECT recommendation_id, decision, user_id, user_name, decided_at
+        FROM recommendation_decisions
+        WHERE recommendation_id IN ({','.join('?' * len(ids))})
+        """,
+        ids,
+    )
+    return {
+        row["recommendation_id"]: RecommendationDecision(
+            decision=row["decision"], user_id=row["user_id"], user_name=row["user_name"],
+            decided_at=datetime.fromisoformat(row["decided_at"]),
+        )
+        for row in await cursor.fetchall()
+    }
 
 
 async def _store_if_changed(
@@ -224,8 +347,11 @@ async def _store_if_changed(
     *,
     occurred_at: Optional[Union[datetime, str]] = None,
     skip_initial_insufficient: bool = False,
-) -> None:
+) -> Optional[int]:
     """Guarda la recomendación si dice algo distinto de la última guardada.
+
+    Devuelve el id de la guardada que la representa (la nueva o la última,
+    si dice lo mismo); None si no se guardó.
 
     Con `skip_initial_insufficient` (desde la ingesta), un vivero sin
     historial no estrena la tabla con un \"faltan datos\": una lectura sin
@@ -233,7 +359,7 @@ async def _store_if_changed(
     """
     cursor = await db.execute(
         """
-        SELECT outcome, urgent, tank_blocks FROM irrigation_recommendations
+        SELECT id, outcome, urgent, tank_blocks FROM irrigation_recommendations
         WHERE greenhouse_id = ?
         ORDER BY id DESC LIMIT 1
         """,
@@ -245,10 +371,10 @@ async def _store_if_changed(
         and last is None
         and current.outcome == recommendation.Outcome.insufficient_data
     ):
-        return
+        return None
     key = (current.outcome.value, int(current.urgent), int(current.tank_blocks))
-    if last is not None and tuple(last) == key:
-        return
+    if last is not None and (last["outcome"], last["urgent"], last["tank_blocks"]) == key:
+        return last["id"]
     cursor = await db.execute(
         """
         INSERT INTO irrigation_recommendations
@@ -268,6 +394,7 @@ async def _store_if_changed(
         occurred_at=occurred_at or current.generated_at, now=current.generated_at,
     )
     await db.commit()
+    return cursor.lastrowid
 
 
 async def _measured(

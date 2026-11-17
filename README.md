@@ -1,10 +1,11 @@
 # SmartGreenAI — Radish Crop
 
-Documentación de la API en SwaggerHub (v1.9.0; **falta subir la v1.11.0**):
+Documentación de la API en SwaggerHub (v1.9.0; **falta subir la v1.12.0**):
 https://app.swaggerhub.com/apis/upaep-5f9/smartgreenai-radish-crop-api-3/1.9.0
 
 La fuente oficial del contrato es `openapi.yaml` de este repositorio
-(**v1.11.0**: SYS-04 cablea el flujo completo sensor → nube → alerta/IA →
+(**v1.12.0**: AI-07 deja aceptar o rechazar la recomendación de riego y
+regar desde la misma tarjeta. Antes, v1.11.0: SYS-04 cablea el flujo completo sensor → nube → alerta/IA →
 actuador — cada lote que manda la Pi evalúa al llegar actuadores, riego,
 alertas y la recomendación de riego, y la respuesta reporta en `errors` los
 pasos que fallen. Antes, v1.10.0, Sprint 4: agrega la bitácora de auditoría de AUTH-05 y el

@@ -14,6 +14,7 @@ Backend en FastAPI del vivero de rábano. Hoy cubre:
 | AI-02 | Condiciones inusuales: lo que se sale del patrón reciente de su sensor, con valor, rango esperado y hora |
 | AI-04 | Recomendación de riego que pesa juntas la humedad de la tierra, la temperatura y el tiempo desde el último riego |
 | AI-05 | Explicación en lenguaje claro de cada recomendación, y recomendaciones guardadas con sus entradas exactas |
+| AI-07 | Aceptar o rechazar la recomendación de riego, con quién y cuándo; la rechazada sigue en el historial |
 | SYS-04 | Flujo completo sensor → nube → alerta/IA → actuador: cada lote evalúa actuadores, riego, alertas y recomendación al llegar, y reporta en `errors` los pasos que fallen |
 
 También sirve el frontend (`../frontend`) desde el mismo origen.
@@ -120,10 +121,11 @@ export SMARTGREENAI_JWT_SECRET="cambia-esto-por-algo-largo"
 | GET | `/greenhouses/{greenhouse_id}/anomalies` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/irrigation/recommendation` | Bearer | todos (productor: solo su vivero) |
 | GET | `/greenhouses/{greenhouse_id}/irrigation/recommendations` | Bearer | todos (productor: solo su vivero) |
+| POST | `/greenhouses/{greenhouse_id}/irrigation/recommendations/{recommendation_id}/decision` | Bearer | todos (productor: solo su vivero) |
 | GET | `/audit/events` | Bearer | admin, super_admin |
 | GET | `/health` (fuera de `/api/v1`) | pública | — |
 
-El contrato completo está en `../openapi.yaml` (v1.11.0).
+El contrato completo está en `../openapi.yaml` (v1.12.0).
 
 ### Reglas de la ingesta (MON-04, ajustadas en Sprint 2)
 
@@ -379,6 +381,25 @@ consulta: sin nadie viendo el dashboard no se generan recomendaciones.
 **Sin explicación no se muestra.** Si `is_explained()` no aprueba el texto, el
 endpoint responde 503 y no guarda nada.
 
+### Aceptar o rechazar la recomendación (AI-07)
+
+La recomendación actual y las guardadas traen `id` y `decision` (quién
+decidió, qué y cuándo; `null` sin decidir).
+`POST /greenhouses/{id}/irrigation/recommendations/{recommendation_id}/decision`
+con `{"decision": "accepted"}` o `"rejected"` la guarda en
+`recommendation_decisions` y en la bitácora, en la misma transacción.
+
+- **Una sola vez** por recomendación (índice único): la segunda es 409
+  `already_decided`.
+- **Solo la más reciente** del vivero: decidir sobre una vieja es 409
+  `superseded`, porque ya no describe lo que pasa ahora.
+- `insufficient_data` e `irrigating` no piden decisión (422 `not_decidable`).
+- **Aceptar no riega.** El riego lo dispara la persona desde la misma tarjeta
+  con la orden manual de ACT-02 (`POST /actuators/{id}/commands`), que sigue
+  pidiendo el modo manual y agua en el tanque.
+- Una rechazada sigue en `GET .../recommendations` con lo que recomendaba y
+  su decisión.
+
 ### Bitácora de auditoría (AUTH-05)
 
 Una sola tabla, `audit_log`, para todo lo que pasa en la plataforma. Cada
@@ -395,7 +416,7 @@ evento dice **quién** (`actor_type`, `actor_id`, `actor_name`), **qué**
 | `actuator` | `command_requested`, `mode_changed` | la persona, o `system` si el backend re-sincroniza el modo |
 | `actuator` | `actuator_registered`, `actuator_updated`, `actuator_deactivated`, `actuator_reactivated` | el administrador |
 | `recommendation` | `recommendation_generated` | `system` (la IA) |
-| `recommendation` | `recommendation_accepted`, `recommendation_rejected` | reservadas para AI-07 |
+| `recommendation` | `recommendation_accepted`, `recommendation_rejected` (AI-07) | la persona que decidió |
 
 ```bash
 # Alertas y equipos del 10 al 12 de noviembre, 20 por página
@@ -540,7 +561,7 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-546 tests: ingesta (9), horas y validación parcial de la ingesta (24),
+582 tests: ingesta (9), horas y validación parcial de la ingesta (24),
 login (22), roles (54, incluye el barrido de todas las rutas), actuadores
 (36), últimas lecturas (11), soporte del dashboard (15), estado de los
 actuadores (18), alertas (41), espejo de las constantes del firmware (5),
@@ -550,7 +571,10 @@ Pi que gana la columna), anomalías (41, `test_anomalies.py`: la regla pura,
 el riego que las explica y el endpoint), recomendación de riego (30,
 `test_recommendation.py`: cada variable cambia el resultado, las orillas y
 el endpoint), explicación de la recomendación (36, `test_explanation.py`: el
-texto, lo guardado y que sin explicación no se muestra), bitácora (27,
+texto, lo guardado y que sin explicación no se muestra), decisión sobre la
+recomendación (11, `test_decisions.py`: quién y cuándo, la bitácora, una sola
+vez, solo la más reciente, regar después de aceptar y la rechazada en el
+historial), bitácora (27,
 `test_audit.py`: cada tipo de evento queda con actor, acción y hora, la
 consulta por fecha y tipo, y que la BD rechaza `UPDATE` y `DELETE`),
 contraseñas (19, `test_passwords.py`: bcrypt y scrypt, la migración en el
@@ -621,6 +645,7 @@ backend/
 | `actuator_commands` | ACT-02 | Órdenes al Arduino y su estado (pending → sent → confirmed / rejected / expired) |
 | `actuator_events` | ACT-02 | Cada encendido/apagado con origen (`auto`/`manual`), motivo y usuario |
 | `irrigation_recommendations` | AI-05 | Cada recomendación distinta, con sus entradas y su explicación |
+| `recommendation_decisions` | AI-07 | La decisión sobre cada recomendación (una sola): aceptada o rechazada, por quién y cuándo |
 | `audit_log` | AUTH-05 | Bitácora: una fila por evento con actor, acción y hora. Sin llaves foráneas (guarda los nombres como eran) y con triggers que impiden `UPDATE` y `DELETE` |
 
 No hay migraciones: las tablas se crean con `CREATE TABLE IF NOT EXISTS`. Si

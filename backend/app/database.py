@@ -267,6 +267,19 @@ async def init_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
         CREATE INDEX IF NOT EXISTS ix_recommendations_greenhouse
             ON irrigation_recommendations(greenhouse_id, id);
 
+        -- AI-07: lo que decidio una persona sobre una recomendacion. Una
+        -- sola decision por recomendacion (UNIQUE).
+        CREATE TABLE IF NOT EXISTS recommendation_decisions (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            recommendation_id INTEGER NOT NULL UNIQUE
+                              REFERENCES irrigation_recommendations(id),
+            greenhouse_id     TEXT NOT NULL,
+            decision          TEXT NOT NULL CHECK(decision IN ('accepted','rejected')),
+            user_id           INTEGER NOT NULL REFERENCES users(id),
+            user_name         TEXT NOT NULL,
+            decided_at        TEXT NOT NULL
+        );
+
         -- AUTH-05: bitacora de auditoria. Una fila por evento de CUALQUIER
         -- tipo (sesiones, alertas, equipos, recomendaciones) con quien, que y
         -- cuando; ver app/audit.py. No lleva llaves foraneas a proposito: el

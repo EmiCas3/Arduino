@@ -1151,6 +1151,14 @@ code, .mono {
 .rec-input dd { margin: 0; color: var(--muted); }
 .rec-input strong { color: var(--ink); }
 .rec-previous { gap: 14px; margin-top: 10px; }
+/* AI-07: decidir sobre la recomendación y regar desde la misma tarjeta. */
+.rec-decision { display: grid; gap: 8px; }
+.rec-decision:empty { display: none; }
+.rec-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.rec-ask { font-size: 0.875rem; font-weight: 600; color: var(--ink-2); margin-right: 4px; }
+.rec-decided { margin: 0; font-size: 0.8125rem; color: var(--muted); }
+.rec-feedback { margin: 0; font-size: 0.8125rem; color: var(--leaf-strong); }
+.rec-feedback[data-tone="warn"] { color: var(--warn); }
 .rec-previous-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; margin-bottom: 4px; }
 
 /* Avisos flotantes: una alerta nueva llega sin recargar la página. */

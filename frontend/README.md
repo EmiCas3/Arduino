@@ -152,6 +152,18 @@ debajo de "Estado actual", muestra lo que devuelve
   y un 503 quita también la que estaba en pantalla.
 - Se refresca sola cada minuto, y un detalle abierto sigue abierto.
 
+### Aceptar o rechazar (AI-07)
+
+- **"¿Qué decides?" Aceptar / Rechazar** aparece en la recomendación actual
+  mientras nadie haya decidido. Después se ve "Aceptada por Ana a las 10:05".
+- **"Regar ahora"** aparece si se aceptó una recomendación de regar. Pide
+  confirmar ("¿Encender la bomba ahora?") y manda la orden manual de la bomba.
+  Si el riego está en automático o el tanque está bajo, se muestra el motivo
+  que da la API.
+- **"Recomendaciones anteriores"** muestra la decisión de cada una: una
+  rechazada sigue ahí con lo que recomendaba.
+- La lógica está en `decisionView()` (`metrics.js`), con sus pruebas.
+
 ## Condiciones inusuales (AI-02)
 
 La tarjeta "Condiciones inusuales" de "Mi vivero" (`anomalies.js`), justo

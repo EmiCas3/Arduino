@@ -929,7 +929,28 @@ class RecommendationExplanation(BaseModel):
     )
 
 
+class DecisionEnum(str, Enum):
+    accepted = "accepted"
+    rejected = "rejected"
+
+
+class RecommendationDecisionCreate(BaseModel):
+    decision: DecisionEnum
+
+
+class RecommendationDecision(BaseModel):
+    """Lo que decidió una persona sobre una recomendación (AI-07)."""
+
+    decision: DecisionEnum
+    user_id: int
+    user_name: str = Field(..., description="Nombre de quien decidió, como era en ese momento")
+    decided_at: datetime
+
+
 class IrrigationRecommendation(BaseModel):
+    id: Optional[int] = Field(
+        None, description="Id de la recomendación guardada; null si no se guardó"
+    )
     greenhouse_id: str
     generated_at: datetime
     outcome: RecommendationOutcome = Field(
@@ -950,6 +971,9 @@ class IrrigationRecommendation(BaseModel):
     missing: List[str] = Field(
         default_factory=list,
         description="Entradas sin dato (soil, temperature, last_irrigation, tank)",
+    )
+    decision: Optional[RecommendationDecision] = Field(
+        None, description="Lo que decidió una persona (AI-07); null = sin decidir"
     )
 
 

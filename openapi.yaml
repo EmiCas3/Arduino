@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: SmartGreenAI - Radish Crop API
-  version: 1.11.0
+  version: 1.12.0
   description: |
     Contrato REST entre la Raspberry Pi (gateway), el backend en la nube y el
     dashboard web. Cubre SYS-01 y define lo que implementan CONF-04 (registro),
@@ -170,6 +170,14 @@ info:
     (schema `PipelineError`): los pasos posteriores al guardado que fallaron.
     Las lecturas rechazadas quedan ademas en el log del backend. Un cliente
     viejo puede ignorar el campo.
+
+    **v1.12.0 (Sprint 4, AI-07):** aceptar o rechazar la recomendacion de
+    riego. La recomendacion (actual y guardadas) agrega `id` y `decision`
+    (quien decidio, que y cuando). `POST /greenhouses/{greenhouse_id}/irrigation/recommendations/{recommendation_id}/decision`
+    guarda la decision una sola vez, solo sobre la recomendacion mas reciente,
+    y la deja en la bitacora (`recommendation_accepted` /
+    `recommendation_rejected`). Aceptar no riega: el riego se dispara con la
+    orden manual de la bomba. Un cliente viejo puede ignorar los campos nuevos.
 
   contact:
     name: RadishSoftware - UPAEP, Agile Project Management
@@ -786,6 +794,79 @@ paths:
           $ref: '#/components/responses/SessionRequired'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  /greenhouses/{greenhouse_id}/irrigation/recommendations/{recommendation_id}/decision:
+    parameters:
+      - name: greenhouse_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 64
+      - name: recommendation_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      tags: [analysis]
+      summary: Aceptar o rechazar una recomendacion de riego
+      description: |
+        Guarda la decision de la persona (AI-07) con su nombre y la hora, y la
+        deja en la bitacora (`recommendation_accepted` o
+        `recommendation_rejected`, en la misma transaccion).
+
+        - Una sola decision por recomendacion: la segunda responde 409
+          `already_decided`.
+        - Solo sobre la mas reciente del vivero: una vieja responde 409
+          `superseded`.
+        - `insufficient_data` e `irrigating` no piden decision: 422
+          `not_decidable`.
+
+        Aceptar NO riega. El riego se dispara desde la misma pantalla con la
+        orden manual de la bomba (`POST /actuators/{actuator_id}/commands`),
+        que sigue pidiendo el modo manual y agua en el tanque. Todos los
+        roles; un productor solo su vivero.
+      operationId: decideIrrigationRecommendation
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecommendationDecisionCreate'
+      responses:
+        '201':
+          description: La decision guardada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationDecision'
+        '401':
+          $ref: '#/components/responses/SessionRequired'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: La recomendacion no existe en ese vivero
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '409':
+          description: Ya se decidio (`already_decided`) o ya hay una mas nueva (`superseded`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          description: No pide decision (`not_decidable`) o el cuerpo no es valido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
 
   # ── Sprint 4: bitacora de auditoria (AUTH-05) ─────────────────────────
 
@@ -2986,6 +3067,32 @@ components:
           items:
             type: string
 
+    RecommendationDecisionCreate:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [accepted, rejected]
+
+    RecommendationDecision:
+      type: object
+      description: Lo que decidio una persona sobre una recomendacion (AI-07).
+      required: [decision, user_id, user_name, decided_at]
+      properties:
+        decision:
+          type: string
+          enum: [accepted, rejected]
+        user_id:
+          type: integer
+        user_name:
+          type: string
+          description: Nombre de quien decidio, como era en ese momento
+          example: Productor de rabano
+        decided_at:
+          type: string
+          format: date-time
+
     RecommendationHistory:
       type: object
       required: [greenhouse_id, items]
@@ -3003,6 +3110,10 @@ components:
         [greenhouse_id, generated_at, outcome, urgent, tank_blocks, explanation,
          threshold, watch_until, breakdown, inputs, missing]
       properties:
+        id:
+          type: integer
+          nullable: true
+          description: Id de la recomendacion guardada; null si no se guardo
         greenhouse_id:
           type: string
         generated_at:
@@ -3037,6 +3148,11 @@ components:
           items:
             type: string
             enum: [soil, temperature, last_irrigation, tank]
+        decision:
+          allOf:
+            - $ref: '#/components/schemas/RecommendationDecision'
+          nullable: true
+          description: Lo que decidio una persona (AI-07); null = sin decidir
 
     ErrorDetail:
       type: object

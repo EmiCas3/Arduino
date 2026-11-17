@@ -447,6 +447,8 @@ export function describeRecommendation(recommendation, clock = (iso) => iso) {
   };
 
   return {
+    id: recommendation.id ?? null,
+    decision: decisionView(recommendation, clock),
     tone: look.tone,
     pill: recommendation.urgent ? { class: "pill-crit", text: "Regar ya" } : look.pill,
     summary: explanation.summary,
@@ -459,6 +461,38 @@ export function describeRecommendation(recommendation, clock = (iso) => iso) {
       measured("Nivel del tanque", recommendation.inputs.tank),
       { label: "Humedad en la que conviene regar", value: `${recommendation.threshold} %`, detail: "" },
     ],
+  };
+}
+
+// ── Decisión sobre la recomendación (AI-07) ───────────────────────────
+
+// Sin dato de la tierra o con la bomba regando no hay nada que decidir.
+const DECIDABLE = new Set(["irrigate", "irrigate_soon", "no_irrigation", "too_wet"]);
+// Aceptar una de estas deja regar desde la misma tarjeta (criterio 2).
+const IRRIGATES = new Set(["irrigate", "irrigate_soon"]);
+
+/**
+ * Qué se puede hacer con una recomendación y qué se decidió:
+ *
+ *   canDecide    sin decidir, guardada y de las que piden decisión
+ *   canIrrigate  aceptada y recomienda regar
+ *   pill, text   "Aceptada" · "Aceptada por Ana a las 10:05" (null sin decidir)
+ *
+ * Solo la recomendación actual se decide: la tarjeta pone canDecide en false
+ * para las anteriores.
+ */
+export function decisionView(recommendation, clock = (iso) => iso) {
+  const decision = recommendation?.decision ?? null;
+  const accepted = decision?.decision === "accepted";
+  return {
+    canDecide: !decision && recommendation?.id != null && DECIDABLE.has(recommendation.outcome),
+    canIrrigate: accepted && IRRIGATES.has(recommendation.outcome),
+    pill: decision
+      ? { class: accepted ? "pill-ok" : "pill-warn", text: accepted ? "Aceptada" : "Rechazada" }
+      : null,
+    text: decision
+      ? `${accepted ? "Aceptada" : "Rechazada"} por ${decision.user_name} a las ${clock(decision.decided_at)}`
+      : null,
   };
 }
 

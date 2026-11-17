@@ -28,6 +28,7 @@ const {
   describeAlert,
   describeAnomaly,
   describeAuditEvent,
+  decisionView,
   describeRecommendation,
   displayOverallStatus,
   eventText,
@@ -568,4 +569,39 @@ test("displayOverallStatus respeta prioridad: empty > stale > crit > down > warn
     alerts: { active_count: 0 },
   });
   assert.equal(ok.state, "ok");
+});
+
+// ── Decisión sobre la recomendación (AI-07) ───────────────────────────
+
+const DECISION = { decision: "accepted", user_id: 1, user_name: "Ana", decided_at: "2026-05-01T10:05:00Z" };
+
+test("una recomendación guardada y sin decidir se puede aceptar o rechazar", () => {
+  const view = decisionView({ ...RECOMMENDATION, id: 7, decision: null }, clock);
+  assert.deepEqual(view, { canDecide: true, canIrrigate: false, pill: null, text: null });
+});
+
+test("sin guardar, sin dato o regando no hay nada que decidir", () => {
+  assert.equal(decisionView({ ...RECOMMENDATION, id: null }).canDecide, false);
+  for (const outcome of ["insufficient_data", "irrigating"]) {
+    assert.equal(decisionView({ ...RECOMMENDATION, id: 7, outcome }).canDecide, false);
+  }
+});
+
+test("aceptada: dice quién y cuándo, y deja regar si recomendaba regar", () => {
+  const view = decisionView({ ...RECOMMENDATION, id: 7, decision: DECISION }, clock);
+  assert.equal(view.canDecide, false);
+  assert.equal(view.canIrrigate, true);
+  assert.equal(view.text, "Aceptada por Ana a las 10:05");
+  assert.deepEqual(view.pill, { class: "pill-ok", text: "Aceptada" });
+  const calm = decisionView({ ...RECOMMENDATION, outcome: "no_irrigation", id: 7, decision: DECISION }, clock);
+  assert.equal(calm.canIrrigate, false);
+});
+
+test("rechazada: no deja regar y se ve como rechazada", () => {
+  const view = decisionView({ ...RECOMMENDATION, id: 7, decision: { ...DECISION, decision: "rejected" } }, clock);
+  assert.equal(view.canIrrigate, false);
+  assert.equal(view.text, "Rechazada por Ana a las 10:05");
+  assert.equal(view.pill.class, "pill-warn");
+  assert.equal(describeRecommendation({ ...RECOMMENDATION, id: 7, decision: { ...DECISION, decision: "rejected" } }, clock).decision.text,
+    "Rechazada por Ana a las 10:05");
 });
