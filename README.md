@@ -1,7 +1,7 @@
 # SmartGreenAI — Radish Crop
 
 Documentación de la API en SwaggerHub (v1.9.0; **falta subir la v1.12.0**):
-https://app.swaggerhub.com/apis/upaep-5f9/smartgreenai-radish-crop-api-3/1.9.0
+https://https://app.swaggerhub.com/apis/upaep-7de/smartgreenai-radish-crop-api/1.12.0
 
 La fuente oficial del contrato es `openapi.yaml` de este repositorio
 (**v1.12.0**: AI-07 deja aceptar o rechazar la recomendación de riego y
